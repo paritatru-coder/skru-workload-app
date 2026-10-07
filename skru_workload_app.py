@@ -19,7 +19,7 @@ try:
 except ImportError:
     fitz = None
 
-APP_VERSION = "v14.5 (Final API Route Fix)"
+APP_VERSION = "v14.7 (Direct OCR & Strict Error Fix)"
 
 CATEGORIES = [
     "1. ภาระงานสอน",
@@ -33,16 +33,15 @@ CATEGORIES = [
 AUTO_CATEGORY = "ให้ AI ประเมินหมวดงานอัตโนมัติ"
 DB_COLUMNS = ["email", "หมวดงาน", "รายการภาระงาน", "เลขคำสั่ง_อ้างอิง", "วันที่", "ภาระงาน_ชม", "วันที่บันทึก"]
 
-# ใช้ 1.5-flash เป็นตัวหลักเพราะเสถียรที่สุดบน REST API ตอนนี้
-DEFAULT_MODEL = "gemini-1.5-flash"
-FALLBACK_MODELS = ["gemini-1.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-pro"]
-MAX_INLINE_BYTES = 8 * 1024 * 1024  
+# ใช้ชื่อโมเดลแบบเจาะจง (Explicit Aliases) ที่รับประกันว่ามีอยู่จริงบน REST API
+DEFAULT_MODEL = "gemini-1.5-flash-latest"
+FALLBACK_MODELS = ["gemini-1.5-flash-latest", "gemini-1.5-pro-latest", "gemini-2.0-flash-exp"]
 
 # ---------------------------------------------------------
 # 1. Page Config
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title=f"SKRU Workload AI - ระบบบันทึกและวิเคราะห์ภาระงาน มรภ.สงขลา ({APP_VERSION})",
+    page_title=f"SKRU Workload AI - ระบบบันทึกและวิเคราะห์ภาระงาน ({APP_VERSION})",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -105,7 +104,7 @@ def save_all_data(full_df):
     return True, "Local Session"
 
 # ---------------------------------------------------------
-# 3. PDF Parsing
+# 3. PDF Parsing & Rendering
 # ---------------------------------------------------------
 def extract_text_from_pdf_bytes(file_bytes):
     text = ""
@@ -134,7 +133,6 @@ def extract_text_from_pdf_bytes(file_bytes):
     return text.strip()
 
 def render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=1.0):
-    """ลดความละเอียดลงนิดหน่อยเพื่อการันตีว่าไฟล์จะไม่ใหญ่เกิน Google API Limit"""
     if not fitz: raise RuntimeError("ไม่พบไลบรารี PyMuPDF")
     images = []
     with fitz.open(stream=file_bytes, filetype="pdf") as doc:
@@ -146,7 +144,7 @@ def render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=1.0):
     return images
 
 # ---------------------------------------------------------
-# 4. Gemini API
+# 4. Gemini API (Strict Error Handling)
 # ---------------------------------------------------------
 class GeminiError(Exception): pass
 
@@ -200,7 +198,6 @@ def call_gemini(api_key, models, parts):
 
     for model in models:
         api_version = "v1alpha" if "2.0" in model else "v1beta"
-        # วิธีการเชื่อมต่อแบบใหม่: ยัด API Key ใส่ใน URL ป้องกัน Streamlit Cloud ลบ Header ทิ้ง
         url = f"https://generativelanguage.googleapis.com/{api_version}/models/{model}:generateContent?key={api_key}"
         
         try:
@@ -215,14 +212,16 @@ def call_gemini(api_key, models, parts):
             
         err_msg = resp.json().get("error", {}).get("message", resp.text[:100]) if "error" in resp.text else resp.text[:100]
         
+        # หยุดการทำงานทันทีหากเป็น Error ร้ายแรง (ไม่ดันทุรังไปโมเดลถัดไปให้หลงทาง)
         if resp.status_code in (401, 403) or "API_KEY" in err_msg: 
             raise GeminiError(f"API Key ผิด/ไม่มีสิทธิ์: {err_msg}")
-        if resp.status_code == 404:
-            last_err = f"404 Not Found (โมเดล {model} ไม่มีอยู่จริง หรือลืมเปิด API): {err_msg}"
-            continue 
+        
         if resp.status_code == 400:
-            last_err = f"400 Bad Request (ไฟล์ภาพอาจใหญ่ไป หรือรูปแบบผิด): {err_msg}"
-            continue 
+            raise GeminiError(f"400 Bad Request (ไฟล์อาจมีปัญหา หรือรูปแบบข้อมูลผิด): {err_msg}")
+
+        if resp.status_code == 404:
+            last_err = f"404 Not Found (โมเดล {model} ไม่มีอยู่จริง): {err_msg}"
+            continue  # ลองรุ่นถัดไปเฉพาะกรณี 404
             
         last_err = f"Error {resp.status_code}: {err_msg}"
         
@@ -236,13 +235,16 @@ def analyze_with_gemini(api_key, models, file_bytes, mime, local_text, category_
     if typed_text: return call_gemini(api_key, models, [{"text": prompt + f"\n\n{typed_text[:8000]}"}])
     
     if mime == "application/pdf":
-        if len(file_bytes) <= MAX_INLINE_BYTES:
-            try: return call_gemini(api_key, models, [{"text": prompt}, inline_part(file_bytes, "application/pdf")])
-            except: pass
-        try: images = render_pdf_pages_to_png(file_bytes)
-        except Exception as e: raise GeminiError(f"แปลง PDF ไม่ได้: {e}")
-        return call_gemini(api_key, models, [{"text": prompt}] + [inline_part(img, "image/png") for img in images])
+        # บังคับแปลง PDF เป็นภาพเสมอ เพื่อแก้ปัญหา 400 Bad Request จากการโยนไฟล์ PDF ตรงๆ เข้า API
+        try: 
+            images = render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=1.0)
+        except Exception as e: 
+            raise GeminiError(f"แปลง PDF เป็นภาพไม่สำเร็จ: {e}")
+            
+        parts = [{"text": prompt}] + [inline_part(img, "image/png") for img in images]
+        return call_gemini(api_key, models, parts)
         
+    # สำหรับไฟล์ภาพ JPG/PNG โยนเข้าได้เลยตามปกติ
     return call_gemini(api_key, models, [{"text": prompt}, inline_part(file_bytes, mime)])
 
 # ---------------------------------------------------------
@@ -323,7 +325,7 @@ with tab1:
         if st.button("🤖 ให้ AI อ่านเอกสาร", type="primary", use_container_width=True):
             if not file_up and not text_in.strip(): st.warning("⚠️ โปรดแนบไฟล์หรือข้อความ")
             else:
-                with st.spinner("กำลังประมวลผล..."):
+                with st.spinner("กำลังประมวลผล... (ระบบจะแปลง PDF เป็นภาพอัตโนมัติ)"):
                     result, notice = None, None
                     try:
                         f_bytes, f_name, mime, l_text, t_text = b"", "", "", "", ""
@@ -339,13 +341,26 @@ with tab1:
                             notice = ("success", f"✅ อ่านสำเร็จด้วย {u_model}" + (" | 🎯 ปรับคะแนนเป็น 24.0" if result["rule_applied"] else ""))
                         else: notice = ("warning", "⚠️ ไม่มี API Key ใช้โหมดกรอกเอง")
                     except Exception as e:
-                        notice = ("warning", f"⚠️ Error: {e} - กรุณากรอกเองด้านขวา")
+                        notice = ("warning", f"⚠️ Error: {e}")
 
-                    st.session_state.update({
-                        "notice": notice, "e_cat": result["category"] if result else CATEGORIES[1], "e_title": result["title"] if result else "",
-                        "e_venue": result["venue"] if result else "", "e_date": result["date"] if result else "", "e_ref": result["ref"] if result else "",
-                        "e_formula": result["formula"] if result else "", "e_hours": float(result["hours"]) if result else 0.0
-                    })
+                    if result:
+                        st.session_state.update({
+                            "notice": notice,
+                            "e_cat": result["category"],
+                            "e_title": result["title"],
+                            "e_venue": result["venue"],
+                            "e_date": result["date"],
+                            "e_ref": result["ref"],
+                            "e_formula": result["formula"],
+                            "e_hours": float(result["hours"])
+                        })
+                    else:
+                        st.session_state.update({
+                            "notice": notice,
+                            "e_cat": CATEGORIES[1],
+                            "e_title": "", "e_venue": "", "e_date": "", 
+                            "e_ref": "", "e_formula": "", "e_hours": 0.0
+                        })
 
     with col_b:
         st.subheader("2. ตรวจสอบ & บันทึก")
