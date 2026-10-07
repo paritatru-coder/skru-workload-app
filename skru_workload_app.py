@@ -3,7 +3,6 @@ import pandas as pd
 import json
 import io
 import re
-import time
 import base64
 import mimetypes
 from datetime import datetime
@@ -19,7 +18,7 @@ try:
 except ImportError:
     fitz = None
 
-APP_VERSION = "v14.7 (Direct OCR & Strict Error Fix)"
+APP_VERSION = "v15 (Stable OCR)"
 
 CATEGORIES = [
     "1. ภาระงานสอน",
@@ -33,15 +32,11 @@ CATEGORIES = [
 AUTO_CATEGORY = "ให้ AI ประเมินหมวดงานอัตโนมัติ"
 DB_COLUMNS = ["email", "หมวดงาน", "รายการภาระงาน", "เลขคำสั่ง_อ้างอิง", "วันที่", "ภาระงาน_ชม", "วันที่บันทึก"]
 
-# ใช้ชื่อโมเดลแบบเจาะจง (Explicit Aliases) ที่รับประกันว่ามีอยู่จริงบน REST API
-DEFAULT_MODEL = "gemini-1.5-flash-latest"
-FALLBACK_MODELS = ["gemini-1.5-flash-latest", "gemini-1.5-pro-latest", "gemini-2.0-flash-exp"]
-
 # ---------------------------------------------------------
 # 1. Page Config
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title=f"SKRU Workload AI - ระบบบันทึกและวิเคราะห์ภาระงาน ({APP_VERSION})",
+    page_title=f"SKRU Workload AI ({APP_VERSION})",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -132,8 +127,8 @@ def extract_text_from_pdf_bytes(file_bytes):
         except: pass
     return text.strip()
 
-def render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=1.0):
-    if not fitz: raise RuntimeError("ไม่พบไลบรารี PyMuPDF")
+def render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=0.8):
+    if not fitz: raise RuntimeError("ไม่พบไลบรารี PyMuPDF ทำให้ระบบไม่สามารถแปลง PDF สแกนเป็นรูปภาพได้")
     images = []
     with fitz.open(stream=file_bytes, filetype="pdf") as doc:
         for i, page in enumerate(doc):
@@ -144,7 +139,7 @@ def render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=1.0):
     return images
 
 # ---------------------------------------------------------
-# 4. Gemini API (Strict Error Handling)
+# 4. Gemini API (Strict Single Model)
 # ---------------------------------------------------------
 class GeminiError(Exception): pass
 
@@ -191,61 +186,41 @@ def extract_json(text):
         except: pass
     raise GeminiError("AI ไม่ได้ตอบเป็น JSON")
 
-def call_gemini(api_key, models, parts):
+def call_gemini(api_key, parts):
     body = {"contents": [{"parts": parts}], "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}}
     headers = {"Content-Type": "application/json"}
-    last_err = ""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    
+    try:
+        resp = requests.post(url, headers=headers, json=body, timeout=60)
+    except Exception as e:
+        raise GeminiError(f"ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ Google ได้: {e}")
 
-    for model in models:
-        api_version = "v1alpha" if "2.0" in model else "v1beta"
-        url = f"https://generativelanguage.googleapis.com/{api_version}/models/{model}:generateContent?key={api_key}"
+    if resp.status_code == 200:
+        cands = resp.json().get("candidates", [])
+        if not cands: raise GeminiError("AI ประมวลผลสำเร็จแต่ไม่ส่งข้อความกลับมา")
+        return extract_json(cands[0]["content"]["parts"][0]["text"])
         
-        try:
-            resp = requests.post(url, headers=headers, json=body, timeout=60)
-        except Exception as e:
-            last_err = f"เชื่อมต่อไม่ได้: {e}"; continue
-
-        if resp.status_code == 200:
-            cands = resp.json().get("candidates", [])
-            if not cands: raise GeminiError("AI ไม่ส่งข้อความกลับมา")
-            return extract_json(cands[0]["content"]["parts"][0]["text"]), model
-            
-        err_msg = resp.json().get("error", {}).get("message", resp.text[:100]) if "error" in resp.text else resp.text[:100]
-        
-        # หยุดการทำงานทันทีหากเป็น Error ร้ายแรง (ไม่ดันทุรังไปโมเดลถัดไปให้หลงทาง)
-        if resp.status_code in (401, 403) or "API_KEY" in err_msg: 
-            raise GeminiError(f"API Key ผิด/ไม่มีสิทธิ์: {err_msg}")
-        
-        if resp.status_code == 400:
-            raise GeminiError(f"400 Bad Request (ไฟล์อาจมีปัญหา หรือรูปแบบข้อมูลผิด): {err_msg}")
-
-        if resp.status_code == 404:
-            last_err = f"404 Not Found (โมเดล {model} ไม่มีอยู่จริง): {err_msg}"
-            continue  # ลองรุ่นถัดไปเฉพาะกรณี 404
-            
-        last_err = f"Error {resp.status_code}: {err_msg}"
-        
-    raise GeminiError(f"ไม่สำเร็จทุกรุ่น: {last_err}")
+    err_msg = resp.json().get("error", {}).get("message", resp.text[:150]) if "error" in resp.text else resp.text[:150]
+    raise GeminiError(f"API Error ({resp.status_code}): {err_msg}")
 
 def inline_part(data_bytes, mime):
     return {"inlineData": {"mimeType": mime, "data": base64.b64encode(data_bytes).decode("ascii")}}
 
-def analyze_with_gemini(api_key, models, file_bytes, mime, local_text, category_hint, typed_text=""):
+def analyze_with_gemini(api_key, file_bytes, mime, local_text, category_hint, typed_text=""):
     prompt = build_prompt(category_hint, local_text)
-    if typed_text: return call_gemini(api_key, models, [{"text": prompt + f"\n\n{typed_text[:8000]}"}])
+    if typed_text: return call_gemini(api_key, [{"text": prompt + f"\n\n{typed_text[:8000]}"}])
     
     if mime == "application/pdf":
-        # บังคับแปลง PDF เป็นภาพเสมอ เพื่อแก้ปัญหา 400 Bad Request จากการโยนไฟล์ PDF ตรงๆ เข้า API
         try: 
-            images = render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=1.0)
+            images = render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=0.8)
         except Exception as e: 
-            raise GeminiError(f"แปลง PDF เป็นภาพไม่สำเร็จ: {e}")
+            raise GeminiError(f"กระบวนการแปลง PDF เป็นภาพล้มเหลว: {e}")
             
         parts = [{"text": prompt}] + [inline_part(img, "image/png") for img in images]
-        return call_gemini(api_key, models, parts)
+        return call_gemini(api_key, parts)
         
-    # สำหรับไฟล์ภาพ JPG/PNG โยนเข้าได้เลยตามปกติ
-    return call_gemini(api_key, models, [{"text": prompt}, inline_part(file_bytes, mime)])
+    return call_gemini(api_key, [{"text": prompt}, inline_part(file_bytes, mime)])
 
 # ---------------------------------------------------------
 # 5. Core Logic
@@ -336,12 +311,12 @@ with tab1:
                             t_text = l_text = text_in.strip()
 
                         if active_api_key:
-                            raw_json, u_model = analyze_with_gemini(active_api_key, FALLBACK_MODELS, f_bytes, mime, l_text, cat_in, t_text)
+                            raw_json = analyze_with_gemini(active_api_key, f_bytes, mime, l_text, cat_in, t_text)
                             result = finalize_result(raw_json, l_text, f_name, cat_in)
-                            notice = ("success", f"✅ อ่านสำเร็จด้วย {u_model}" + (" | 🎯 ปรับคะแนนเป็น 24.0" if result["rule_applied"] else ""))
+                            notice = ("success", "✅ อ่านสำเร็จด้วย gemini-1.5-flash" + (" | 🎯 ปรับคะแนนเป็น 24.0" if result["rule_applied"] else ""))
                         else: notice = ("warning", "⚠️ ไม่มี API Key ใช้โหมดกรอกเอง")
                     except Exception as e:
-                        notice = ("warning", f"⚠️ Error: {e}")
+                        notice = ("warning", f"⚠️ Error จากระบบ: {e}")
 
                     if result:
                         st.session_state.update({
