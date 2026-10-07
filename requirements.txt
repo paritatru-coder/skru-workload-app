@@ -3,3 +3,5 @@ st-gsheets-connection
 google-generativeai
 pandas
 python-docx
+pdfplumber 
+pypdf
