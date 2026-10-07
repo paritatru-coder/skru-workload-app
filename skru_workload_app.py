@@ -207,7 +207,7 @@ def call_gemini(api_key, model_list, parts):
             f"https://generativelanguage.googleapis.com/v1alpha/models/{model}:generateContent?key={api_key}"
         ]
         for url in endpoints:
-            try: resp = requests.post(url, headers=headers, json=body, timeout=60)
+            try: resp = requests.post(url, headers=headers, json=body, timeout=180)
             except Exception as e: last_err = f"เชื่อมต่อไม่ได้: {e}"; continue
 
             if resp.status_code == 200:
