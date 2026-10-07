@@ -9,7 +9,7 @@ import io
 # 1. Page Config & Custom Styling
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="SKRU Workload AI - ระบบบันทึกและวิเคราะห์ภาระงาน มรภ.สงขลา (v9)",
+    page_title="SKRU Workload AI - ระบบบันทึกและวิเคราะห์ภาระงาน มรภ.สงขลา (v10)",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -176,9 +176,9 @@ with st.sidebar:
 # ---------------------------------------------------------
 # 4. Main Interface & Tabs
 # ---------------------------------------------------------
-st.markdown('<div class="main-header">🏛️ SKRU Academic Workload AI Assistant (v9)</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">🏛️ SKRU Academic Workload AI Assistant (v10 - Multimodal Gemini AI)</div>', unsafe_allow_html=True)
 effective_email = user_email.strip() if user_email and user_email.strip() != "" else "guest@skru.ac.th"
-st.markdown(f'<div class="sub-header">ระบบช่วยสกัด เรียบเรียงภาษาทางการ และประเมินภาระงานตามเกณฑ์ มรภ.สงขลา (มติกช.) | ผู้ใช้: <b>{effective_email}</b></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="sub-header">ระบบช่วยสกัด อ่านเอกสารจริงด้วย Gemini AI เรียบเรียงภาษาทางการ และประเมินภาระงานตามเกณฑ์ มรภ.สงขลา (มติกช.) | ผู้ใช้: <b>{effective_email}</b></div>', unsafe_allow_html=True)
 
 # แสดงข้อความแจ้งเตือนเมื่อบันทึกสำเร็จ
 if st.session_state.get("show_saved_success"):
@@ -189,23 +189,23 @@ if st.session_state.get("show_saved_success"):
     """, unsafe_allow_html=True)
     st.session_state["show_saved_success"] = False
 
-tab1, tab2, tab3 = st.tabs(["📥 1. สกัดและเรียบเรียงภาระงาน (AI)", "📊 2. คลังภาระงานสะสม", "📄 3. สรุปแบบ ป-มร.สข. 01 (Word)"])
+tab1, tab2, tab3 = st.tabs(["📥 1. สกัดและเรียบเรียงภาระงาน (Gemini AI)", "📊 2. คลังภาระงานสะสม", "📄 3. สรุปแบบ ป-มร.สข. 01 (Word)"])
 
 all_data_df = load_all_data()
 
 # ---------------------------------------------------------
-# TAB 1: บันทึก สกัด และเรียบเรียงข้อความทางการโดย AI
+# TAB 1: บันทึก สกัด อ่าน PDF/ภาพ จริงด้วย Gemini AI
 # ---------------------------------------------------------
 with tab1:
     col_a, col_b = st.columns([1, 1], gap="large")
     
     with col_a:
-        st.subheader("📝 ขั้นตอนที่ 1: ส่งไฟล์ / ภาพคำสั่ง / พิมพ์ข้อความ")
+        st.subheader("📝 ขั้นตอนที่ 1: ส่งไฟล์ PDF / ภาพคำสั่ง / พิมพ์ข้อความ")
         
         category_input = st.selectbox(
-            "📂 เลือกหมวดภาระงานเบื้องต้น (หรือให้ AI ประเมิน):",
+            "📂 เลือกหมวดภาระงานเบื้องต้น (หรือให้ AI ประเมินจากเอกสาร):",
             [
-                "ให้ AI ประเมินหมวดงานอัตโนมัติ",
+                "ให้ AI ประเมินหมวดงานจากเอกสารอัตโนมัติ",
                 "1. ภาระงานสอน",
                 "2. ภาระงานวิจัย / งานประพันธ์ / งานสร้างสรรค์",
                 "3. ภาระงานบริการวิชาการ",
@@ -217,7 +217,7 @@ with tab1:
         )
         
         input_method = st.radio("เลือกวิธีป้อนข้อมูลให้ AI:", [
-            "📤 อัปโหลดไฟล์เอกสาร/คำสั่ง (PDF, PNG, JPG)",
+            "📤 อัปโหลดไฟล์เอกสาร/คำสั่ง/ผลงาน (PDF, PNG, JPG)",
             "📷 ถ่ายภาพคำสั่งจากกล้องมือถือ",
             "✍️ พิมพ์รายละเอียดภาระงานเอง"
         ])
@@ -226,83 +226,117 @@ with tab1:
         raw_text_input = ""
         
         if "อัปโหลด" in input_method:
-            uploaded_file = st.file_uploader("แนบคำสั่ง/ประกาศ/วุฒิบัตร (PDF, JPG, PNG):", type=["pdf", "png", "jpg", "jpeg", "webp"])
+            uploaded_file = st.file_uploader("แนบคำสั่ง/ประกาศ/ผลงานสร้างสรรค์/วุฒิบัตร (PDF, JPG, PNG):", type=["pdf", "png", "jpg", "jpeg", "webp"])
         elif "ถ่ายภาพ" in input_method:
             uploaded_file = st.camera_input("ถ่ายภาพคำสั่งจากกล้องมือถือ")
         else:
-            raw_text_input = st.text_area("พิมพ์รายละเอียดภาระงานหรือข้อความในคำสั่ง:", placeholder="เช่น เข้าร่วมปฏิบัติหน้าที่วิทยากร โครงการส่งเสริมและพัฒนาศักยภาพชุมชนท้องถิ่น ณ มหาวิทยาลัยราชภัฏสงขลา วันที่ 15-17 ส.ค. 2569 ตามคำสั่ง มรภ.สงขลา ที่ 456/2569...")
+            raw_text_input = st.text_area("พิมพ์รายละเอียดภาระงานหรือข้อความในคำสั่ง:", placeholder="เช่น ผลงานประพันธ์เพลงสร้างสรรค์เรื่อง... เผยแพร่ระดับนานาชาติ...")
 
-        btn_ai_process = st.button("🤖 ให้ AI สกัด ประเมิน และร่างข้อความทางการอัตโนมัติ", type="primary", use_container_width=True)
+        btn_ai_process = st.button("🤖 ให้ Gemini AI อ่านเอกสารและวิเคราะห์ตามเกณฑ์ มรภ.สงขลา", type="primary", use_container_width=True)
 
-    # เมื่อกดปุ่ม AI Process -> ประเมินสกัดข้อมูล และ อัปเดต state widget ในขั้นตอนที่ 2 สดๆ
+    # เมื่อกดปุ่ม AI Process -> เรียก Gemini API อ่านเนื้อหาไฟล์ PDF / Image จริง
     if btn_ai_process:
-        with st.spinner("กำลังอ่านเอกสาร วิเคราะห์ตามเกณฑ์ มรภ.สงขลา และร่างข้อความภาษาทางการ..."):
+        with st.spinner("กำลังส่งเนื้อหาไฟล์ให้ Gemini AI อ่าน OCR และวิเคราะห์ตามประกาศเกณฑ์ มรภ.สงขลา..."):
             
-            # การระบุหมวดงาน
-            eval_category = category_input if category_input != "ให้ AI ประเมินหมวดงานอัตโนมัติ" else "3. ภาระงานบริการวิชาการ"
+            ai_success = False
+            ai_error_msg = ""
             
-            title_ext = "โครงการพัฒนาและส่งเสริมศักยภาพชุมชนท้องถิ่น"
-            venue_ext = "ณ มหาวิทยาลัยราชภัฏสงขลา"
-            date_ext = "ระหว่างวันที่ 15-17 สิงหาคม 2569"
-            ref_ext = "คำสั่ง มรภ.สงขลา ที่ 456/2569"
-            formula_ext = "(6ชมx3วันx0.5)"
-            hours_ext = 9.0
+            # ตรวจสอบ API Key
+            if not active_api_key or active_api_key.strip() == "":
+                st.error("⚠️ ไม่พบ Gemini API Key! กรุณากรอก API Key ในเมนูด้านซ้าย หรือตั้งค่า GEMINI_API_KEY ใน Streamlit Secrets เพื่อเปิดใช้การอ่าน PDF/ภาพ แบบจริงครับ")
+            else:
+                try:
+                    import google.generativeai as genai
+                    genai.configure(api_key=active_api_key.strip())
+                    
+                    # เลือกโมเดล Gemini
+                    model = genai.GenerativeModel("gemini-1.5-flash")
+                    
+                    prompt_instructions = """
+                    คุณเป็น AI ผู้เชี่ยวชาญการตรวจประเมินภาระงานสายวิชาการของ มหาวิทยาลัยราชภัฏสงขลา (มรภ.สงขลา)
+                    โปรดอ่าน สกัดข้อความ OCR และวิเคราะห์เนื้อหาจากเอกสาร/ภาพ/ข้อความที่แนบมานี้อย่างละเอียด
+                    
+                    เกณฑ์การคำนวณชั่วโมงภาระงานของ มรภ.สงขลา (มติกช.):
+                    1. งานวิจัย/งานสร้างสรรค์:
+                       - งานสร้างสรรค์เผยแพร่นานาชาติ มีรางวัล = 24 ชม. | ไม่ได้รับรางวัล = 21 ชม.
+                       - งานสร้างสรรค์เผยแพร่อาเซียน มีรางวัล = 18 ชม. | ไม่ได้รับรางวัล = 15 ชม.
+                       - งานสร้างสรรค์ระดับชาติ มีรางวัล = 10 ชม. | ไม่ได้รับรางวัล = 5 ชม.
+                       - บทความวารสาร TCI กลุ่ม 1 = 19 ชม. | TCI กลุ่ม 2 = 15 ชม.
+                       - Proceedings นานาชาติ = 12 ชม. | ระดับชาติ = 10 ชม.
+                    2. บริการวิชาการ: วิทยากร (3ชมxวันx0.5 สำหรับครึ่งวัน หรือ 6ชมxวันx0.5 สำหรับทั้งวัน), ผู้รับผิดชอบหลัก = 5 ชม., ประธาน = 2 ชม., เลขา = 1.5 ชม., กรรมการ = 1 ชม.
+                    3. ทำนุบำรุงศิลปวัฒนธรรม: ประธาน/ผู้จัด = 1 ชม./วัน, กรรมการ = 0.5 ชม./วัน, แสดง/บรรเลง = 0.5 ชม./ครั้ง
+                    4. งานบริหาร: ประธานหลักสูตร = 15 ชม., เลขานุการหลักสูตร = 10 ชม., คณบดี = 30 ชม., รองคณบดี = 25 ชม.
 
-            # ถ้ามีการอัปโหลดไฟล์ หรือพิมพ์ข้อความ
-            if uploaded_file is not None:
-                fname = uploaded_file.name
-                title_ext = f"กิจกรรมตามเอกสาร {fname.split('.')[0]}"
-                ref_ext = f"คำสั่งอ้างอิงไฟล์ {fname}"
-                date_ext = datetime.now().strftime("ระหว่างวันที่ %d-%m-%Y")
-            elif raw_text_input.strip() != "":
-                txt = raw_text_input.strip()
-                title_ext = txt[:60] + ("..." if len(txt) > 60 else "")
-                ref_ext = "บันทึกข้อความ/คำสั่งอ้างอิง"
+                    โปรดตอบกลับเป็น JSON ภาษาไทยเท่านั้นในรูปแบบต่อไปนี้ (อย่าใส่ข้อความอื่นนอกเหนือจาก JSON):
+                    {
+                      "category": "หมวดงาน (เลือก 1 จาก: 1. ภาระงานสอน, 2. ภาระงานวิจัย / งานประพันธ์ / งานสร้างสรรค์, 3. ภาระงานบริการวิชาการ, 4. ภาระงานทำนุบำรุงศิลปวัฒนธรรม, 5. ภาระงานอื่น ๆ / งานสนับสนุน / คำสั่งเฉพาะกิจ, 6. งานประกันคุณภาพการศึกษา (QA), 7. งานบริหาร / ตำแหน่งทางวิชาการ)",
+                      "title": "ชื่อบทบาท / ชื่อผลงานวิชาการ / ชื่อผลงานสร้างสรรค์ / ชื่อโครงการ (ห้ามนำชื่อไฟล์ .pdf มาใส่เด็ดขาด ให้ดึงชื่อจริงจากเนื้อหา)",
+                      "venue": "สถานที่จัด / ชื่อวารสาร / เวทีแสดง / หน่วยงานผู้จัด",
+                      "date": "วันที่ปฏิบัติงาน หรือ วัน/เดือน/ปี ที่เผยแพร่ (เช่น ระหว่างวันที่ 10-12 สิงหาคม 2569)",
+                      "ref": "เลขที่คำสั่ง / เลขฉบับวารสาร / หนังสืออ้างอิงจริงในเอกสาร",
+                      "formula": "สูตรการคำนวณในวงเล็บตามเกณฑ์ มรภ.สงขลา (เช่น (นับสิทธิ์เผยแพร่นานาชาติ ไม่ได้รับรางวัล = 21 ภาระงาน) หรือ (3ชมx5วันx0.5))",
+                      "hours": 21.0,
+                      "formal_text": "ข้อความภาษาทางการฉบับเต็มสมบูรณ์ที่จะนำไปวางในตาราง แบบ ป-มร.สข. 01"
+                    }
+                    """
 
-            # ปรับสูตรตามหมวดงาน
-            if "วิจัย" in eval_category:
-                formula_ext = "(บทความวารสาร TCI กลุ่ม 1 = 19 ภาระงาน)"
-                hours_ext = 19.0
-            elif "บริการ" in eval_category:
-                formula_ext = "(6ชมx3วันx0.5)"
-                hours_ext = 9.0
-            elif "ทำนุบำรุง" in eval_category:
-                formula_ext = "(= 2วัน x 0.5)"
-                hours_ext = 1.0
-            elif "บริหาร" in eval_category:
-                formula_ext = "(= 15 ภาระงาน)"
-                hours_ext = 15.0
+                    contents_payload = []
+                    
+                    if uploaded_file is not None:
+                        file_bytes = uploaded_file.getvalue()
+                        mime_type = uploaded_file.type if uploaded_file.type else "application/pdf"
+                        
+                        # รองรับ PDF / Images
+                        contents_payload.append({"mime_type": mime_type, "data": file_bytes})
+                        contents_payload.append(f"หมวดงานที่ผู้ใช้ระบุเบื้องต้น: {category_input}\n{prompt_instructions}")
+                    elif raw_text_input.strip() != "":
+                        contents_payload.append(f"ข้อความรายละเอียดภาระงาน:\n{raw_text_input}\n\nหมวดงานที่เลือก: {category_input}\n{prompt_instructions}")
+                    else:
+                        st.warning("⚠️ กรุณาอัปโหลดไฟล์ ถ่ายภาพ หรือพิมพ์ข้อความรายละเอียดก่อนกดปุ่ม AI Process ครับ")
 
-            drafted_formal = f"{title_ext} {venue_ext} {date_ext} ({ref_ext}) = {formula_ext} = {hours_ext:.1f} ชม."
+                    if contents_payload:
+                        response = model.generate_content(contents_payload)
+                        res_text = response.text.strip()
+                        
+                        # ทำความสะอาด JSON string
+                        if res_text.startswith("```json"):
+                            res_text = res_text.split("```json")[1].split("```")[0].strip()
+                        elif res_text.startswith("```"):
+                            res_text = res_text.split("```")[1].split("```")[0].strip()
+                            
+                        parsed_json = json.loads(res_text)
+                        
+                        st.session_state["edit_cat"] = parsed_json.get("category", "2. ภาระงานวิจัย / งานประพันธ์ / งานสร้างสรรค์")
+                        st.session_state["edit_title"] = parsed_json.get("title", "ผลงานสร้างสรรค์")
+                        st.session_state["edit_venue"] = parsed_json.get("venue", "ณ มหาวิทยาลัยราชภัฏสงขลา")
+                        st.session_state["edit_date"] = parsed_json.get("date", datetime.now().strftime("%d-%m-%Y"))
+                        st.session_state["edit_ref"] = parsed_json.get("ref", "คำสั่ง มรภ.สงขลา")
+                        st.session_state["edit_formula"] = parsed_json.get("formula", "(= 1.0 ชม.)")
+                        st.session_state["edit_hours"] = float(parsed_json.get("hours", 1.0))
+                        st.session_state["edit_formal_text"] = parsed_json.get("formal_text", "")
+                        st.session_state["ai_just_extracted"] = True
+                        ai_success = True
 
-            # CRITICAL FIX: อัปเดตเข้า Session State Keys ของ Widget โดยตรง เพื่อให้หน้าจอขั้นตอนที่ 2 เปลี่ยนตามทันที!
-            st.session_state["edit_cat"] = eval_category
-            st.session_state["edit_title"] = title_ext
-            st.session_state["edit_venue"] = venue_ext
-            st.session_state["edit_date"] = date_ext
-            st.session_state["edit_ref"] = ref_ext
-            st.session_state["edit_formula"] = formula_ext
-            st.session_state["edit_hours"] = float(hours_ext)
-            st.session_state["edit_formal_text"] = drafted_formal
-            st.session_state["ai_just_extracted"] = True
+                except Exception as ex:
+                    ai_error_msg = str(ex)
+                    st.error(f"เกิดข้อผิดพลาดในการเรียก Gemini AI: {ai_error_msg}")
 
     with col_b:
-        st.subheader("🤖 ขั้นตอนที่ 2: ผลการประเมินจาก AI (ปรับแก้ได้ทุกช่อง)")
+        st.subheader("🤖 ขั้นตอนที่ 2: ผลการประเมินจาก Gemini AI (ตรวจทาน/ปรับแก้ได้)")
         
         if st.session_state.get("ai_just_extracted"):
-            st.success("✅ AI สกัดและร่างข้อความทางการให้เรียบร้อยแล้ว! สามารถตรวจสอบและปรับแก้ไขทุกช่องได้ด้านล่างนี้เลยครับ")
+            st.success("✅ Gemini AI อ่านเอกสารสกัดข้อมูลและร่างข้อความทางการให้เรียบร้อยแล้ว! สามารถตรวจสอบและปรับแก้ไขทุกช่องได้ด้านล่างนี้เลยครับ")
             st.session_state["ai_just_extracted"] = False
         else:
-            st.markdown("<div class='info-alert'>💡 <b>กดปุ่ม '🤖 ให้ AI สกัด...' ในขั้นตอนที่ 1</b> ระบบจะประเมินและร่างข้อความทางการให้โดยอัตโนมัติ คุณสามารถพิมพ์แก้ไขทุกช่องได้ทันที</div>", unsafe_allow_html=True)
+            st.markdown("<div class='info-alert'>💡 <b>อัปโหลดไฟล์แล้วกดปุ่ม '🤖 ให้ Gemini AI อ่านเอกสาร...'</b> ระบบจะสกัดเนื้อหาจริงและร่างข้อความทางการให้ คุณสามารถพิมพ์แก้ไขทุกช่องได้ทันที</div>", unsafe_allow_html=True)
 
-        # ค่าตั้งต้นใน Session State (ถ้ายังไม่มีให้สร้าง)
-        if "edit_cat" not in st.session_state: st.session_state["edit_cat"] = "3. ภาระงานบริการวิชาการ"
-        if "edit_title" not in st.session_state: st.session_state["edit_title"] = "โครงการพัฒนาและส่งเสริมศักยภาพชุมชนท้องถิ่น"
+        if "edit_cat" not in st.session_state: st.session_state["edit_cat"] = "2. ภาระงานวิจัย / งานประพันธ์ / งานสร้างสรรค์"
+        if "edit_title" not in st.session_state: st.session_state["edit_title"] = "ผลงานประพันธ์เพลงสร้างสรรค์"
         if "edit_venue" not in st.session_state: st.session_state["edit_venue"] = "ณ มหาวิทยาลัยราชภัฏสงขลา"
-        if "edit_date" not in st.session_state: st.session_state["edit_date"] = "ระหว่างวันที่ 15-17 สิงหาคม 2569"
-        if "edit_ref" not in st.session_state: st.session_state["edit_ref"] = "คำสั่ง มรภ.สงขลา ที่ 456/2569"
-        if "edit_formula" not in st.session_state: st.session_state["edit_formula"] = "(6ชมx3วันx0.5)"
-        if "edit_hours" not in st.session_state: st.session_state["edit_hours"] = 9.0
+        if "edit_date" not in st.session_state: st.session_state["edit_date"] = "ระหว่างวันที่ 10-12 สิงหาคม 2569"
+        if "edit_ref" not in st.session_state: st.session_state["edit_ref"] = "คำสั่ง มรภ.สงขลา ที่ 123/2569"
+        if "edit_formula" not in st.session_state: st.session_state["edit_formula"] = "(นับสิทธิ์เผยแพร่นานาชาติ = 21 ภาระงาน)"
+        if "edit_hours" not in st.session_state: st.session_state["edit_hours"] = 21.0
 
         final_cat = st.selectbox("📂 หมวดภาระงาน:", [
             "1. ภาระงานสอน",
@@ -317,18 +351,16 @@ with tab1:
         c_f1, c_f2 = st.columns(2)
         with c_f1:
             final_title = st.text_input("1. ชื่อบทบาท / โครงการ / ผลงาน:", key="edit_title")
-            final_date = st.text_input("3. วันที่ปฏิบัติงาน:", key="edit_date")
+            final_date = st.text_input("3. วันที่ปฏิบัติงาน / วันที่เผยแพร่:", key="edit_date")
             final_formula = st.text_input("5. สูตรคำนวณ (ในวงเล็บ):", key="edit_formula")
         with c_f2:
-            final_venue = st.text_input("2. สถานที่จัด / หน่วยงาน:", key="edit_venue")
+            final_venue = st.text_input("2. สถานที่จัด / ชื่อวารสาร / เวที:", key="edit_venue")
             final_ref = st.text_input("4. เลขที่คำสั่ง / หนังสืออ้างอิง:", key="edit_ref")
             final_hours = st.number_input("6. สรุปชั่วโมงภาระงานสุทธิ:", step=0.5, key="edit_hours")
 
-        # สร้างข้อความทางการที่อัปเดตแบบเรียลไทม์
         composed_live_text = f"{final_title} {final_venue} {final_date} ({final_ref}) = {final_formula} = {final_hours:.1f} ชม."
 
-        # ซิงค์เข้า text_area
-        if "edit_formal_text" not in st.session_state:
+        if "edit_formal_text" not in st.session_state or st.session_state["edit_formal_text"] == "":
             st.session_state["edit_formal_text"] = composed_live_text
 
         final_formal_text = st.text_area(
@@ -345,7 +377,6 @@ with tab1:
         </div>
         """, unsafe_allow_html=True)
 
-        # ปุ่มบันทึกลงคลังภาระงานสะสม
         btn_save_item = st.button("💾 บันทึกลงคลังภาระงานสะสม (ซิงค์ Cloud)", type="primary", use_container_width=True)
 
         if btn_save_item:
@@ -396,7 +427,7 @@ with tab2:
             user_df[display_cols],
             use_container_width=True,
             num_rows="dynamic",
-            key="user_data_editor_v9"
+            key="user_data_editor_v10"
         )
         
         col_m1, col_m2, col_m3 = st.columns([1.5, 1, 1])
@@ -460,7 +491,7 @@ with tab3:
 
     st.divider()
 
-    def generate_docx_v9():
+    def generate_docx_v10():
         buffer = io.BytesIO()
         try:
             from docx import Document
@@ -513,11 +544,11 @@ with tab3:
             buffer.seek(0)
             return buffer
         except Exception:
-            buffer.write(f"SKRU Workload Report v9\nUser: {effective_email}\nTotal Hours: {total_actual_hours}\nScore: {total_score}".encode('utf-8'))
+            buffer.write(f"SKRU Workload Report v10\nUser: {effective_email}\nTotal Hours: {total_actual_hours}\nScore: {total_score}".encode('utf-8'))
             buffer.seek(0)
             return buffer
 
-    docx_file = generate_docx_v9()
+    docx_file = generate_docx_v10()
     
     file_email_slug = effective_email.split('@')[0]
     st.download_button(
