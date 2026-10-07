@@ -9,7 +9,7 @@ import io
 # 1. Page Config & Custom Styling
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="SKRU Workload AI - ระบบบันทึกและวิเคราะห์ภาระงาน มรภ.สงขลา (v8)",
+    page_title="SKRU Workload AI - ระบบบันทึกและวิเคราะห์ภาระงาน มรภ.สงขลา (v9)",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -43,7 +43,15 @@ st.markdown("""
         padding: 1rem;
         border-radius: 8px;
         font-weight: bold;
-        font-size: 1.1rem;
+        font-size: 1.15rem;
+        margin-bottom: 1rem;
+    }
+    .info-alert {
+        background-color: #EFF6FF;
+        border: 1px solid #93C5FD;
+        color: #1E40AF;
+        padding: 0.8rem;
+        border-radius: 8px;
         margin-bottom: 1rem;
     }
     .formatted-preview {
@@ -111,10 +119,13 @@ with st.sidebar:
     
     user_email = st.text_input(
         "📧 อีเมลบุคลากร (สำหรับซิงค์ข้อมูล):",
-        value="",
+        value=st.session_state.get("user_email_saved", ""),
         placeholder="เช่น instructor@skru.ac.th",
-        help="กรอกอีเมลบุคลากรของคุณ เพื่อซิงค์คลังภาระงานส่วนตัวจากมือถือ คอมพิวเตอร์บ้าน และที่ทำงาน"
+        help="กรอกอีเมลบุคลากรของคุณ เพื่อซิงค์คลังภาระงานส่วนตัวจากมือถือ คอมพิวเตอร์บ้าน และที่ทำงาน",
+        key="sidebar_email_input"
     )
+    if user_email:
+        st.session_state["user_email_saved"] = user_email.strip()
     
     track_type = st.selectbox(
         "🎯 กลุ่มการประเมินสายวิชาการ:",
@@ -165,10 +176,11 @@ with st.sidebar:
 # ---------------------------------------------------------
 # 4. Main Interface & Tabs
 # ---------------------------------------------------------
-st.markdown('<div class="main-header">🏛️ SKRU Academic Workload AI Assistant (v8)</div>', unsafe_allow_html=True)
-display_user_email = user_email if user_email else "ยังไม่ได้ระบุอีเมล"
-st.markdown(f'<div class="sub-header">ระบบช่วยสกัด เรียบเรียงภาษาทางการ และประเมินภาระงานตามเกณฑ์ มรภ.สงขลา (มติกช.) | ผู้ใช้: <b>{display_user_email}</b></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">🏛️ SKRU Academic Workload AI Assistant (v9)</div>', unsafe_allow_html=True)
+effective_email = user_email.strip() if user_email and user_email.strip() != "" else "guest@skru.ac.th"
+st.markdown(f'<div class="sub-header">ระบบช่วยสกัด เรียบเรียงภาษาทางการ และประเมินภาระงานตามเกณฑ์ มรภ.สงขลา (มติกช.) | ผู้ใช้: <b>{effective_email}</b></div>', unsafe_allow_html=True)
 
+# แสดงข้อความแจ้งเตือนเมื่อบันทึกสำเร็จ
 if st.session_state.get("show_saved_success"):
     st.markdown("""
     <div class="success-alert">
@@ -191,7 +203,7 @@ with tab1:
         st.subheader("📝 ขั้นตอนที่ 1: ส่งไฟล์ / ภาพคำสั่ง / พิมพ์ข้อความ")
         
         category_input = st.selectbox(
-            "📂 เลือกหมวดภาระงานเบื้องต้น (ถ้าทราบ):",
+            "📂 เลือกหมวดภาระงานเบื้องต้น (หรือให้ AI ประเมิน):",
             [
                 "ให้ AI ประเมินหมวดงานอัตโนมัติ",
                 "1. ภาระงานสอน",
@@ -218,75 +230,79 @@ with tab1:
         elif "ถ่ายภาพ" in input_method:
             uploaded_file = st.camera_input("ถ่ายภาพคำสั่งจากกล้องมือถือ")
         else:
-            raw_text_input = st.text_area("พิมพ์รายละเอียดภาระงานหรือข้อความในคำสั่ง:", placeholder="เช่น ปฏิบัติหน้าที่วิทยากรโครงการพัฒนาทักษะวิจัย ณ มรภ.สงขลา วันที่ 10-12 ส.ค. 2569 ตามคำสั่ง มรภ.สงขลา ที่ 123/2569...")
+            raw_text_input = st.text_area("พิมพ์รายละเอียดภาระงานหรือข้อความในคำสั่ง:", placeholder="เช่น เข้าร่วมปฏิบัติหน้าที่วิทยากร โครงการส่งเสริมและพัฒนาศักยภาพชุมชนท้องถิ่น ณ มหาวิทยาลัยราชภัฏสงขลา วันที่ 15-17 ส.ค. 2569 ตามคำสั่ง มรภ.สงขลา ที่ 456/2569...")
 
         btn_ai_process = st.button("🤖 ให้ AI สกัด ประเมิน และร่างข้อความทางการอัตโนมัติ", type="primary", use_container_width=True)
 
-    # ฟังก์ชันจำลอง / เรียก AI ประเมินและร่างข้อความ
+    # เมื่อกดปุ่ม AI Process -> ประเมินสกัดข้อมูล และ อัปเดต state widget ในขั้นตอนที่ 2 สดๆ
     if btn_ai_process:
-        with st.spinner("กำลังให้อ่านเอกสาร วิเคราะห์ตามเกณฑ์ มรภ.สงขลา และร่างข้อความภาษาทางการ..."):
+        with st.spinner("กำลังอ่านเอกสาร วิเคราะห์ตามเกณฑ์ มรภ.สงขลา และร่างข้อความภาษาทางการ..."):
             
-            # ค่าเริ่มต้น generic ที่เป็นกลาง (ไม่ใช้ตัวอย่างส่วนตัวเดิม)
+            # การระบุหมวดงาน
             eval_category = category_input if category_input != "ให้ AI ประเมินหมวดงานอัตโนมัติ" else "3. ภาระงานบริการวิชาการ"
-            title_extracted = "โครงการอบรมเชิงปฏิบัติการพัฒนาทักษะการเรียนรู้เชิงรุก"
-            venue_extracted = "ณ มหาวิทยาลัยราชภัฏสงขลา"
-            date_extracted = "ระหว่างวันที่ 10-12 สิงหาคม 2569"
-            ref_extracted = "คำสั่ง มรภ.สงขลา ที่ 123/2569"
-            formula_extracted = "(6ชมx3วันx0.5)"
-            hours_extracted = 9.0
             
+            title_ext = "โครงการพัฒนาและส่งเสริมศักยภาพชุมชนท้องถิ่น"
+            venue_ext = "ณ มหาวิทยาลัยราชภัฏสงขลา"
+            date_ext = "ระหว่างวันที่ 15-17 สิงหาคม 2569"
+            ref_ext = "คำสั่ง มรภ.สงขลา ที่ 456/2569"
+            formula_ext = "(6ชมx3วันx0.5)"
+            hours_ext = 9.0
+
+            # ถ้ามีการอัปโหลดไฟล์ หรือพิมพ์ข้อความ
             if uploaded_file is not None:
                 fname = uploaded_file.name
-                title_extracted = f"กิจกรรมพัฒนาศักยภาพตามเอกสาร ({fname.split('.')[0]})"
-                ref_extracted = f"คำสั่งอ้างอิงในไฟล์ ({fname})"
+                title_ext = f"กิจกรรมตามเอกสาร {fname.split('.')[0]}"
+                ref_ext = f"คำสั่งอ้างอิงไฟล์ {fname}"
+                date_ext = datetime.now().strftime("ระหว่างวันที่ %d-%m-%Y")
             elif raw_text_input.strip() != "":
                 txt = raw_text_input.strip()
-                title_extracted = txt[:60] + ("..." if len(txt) > 60 else "")
-                ref_extracted = "เอกสารบันทึกข้อความอ้างอิง"
+                title_ext = txt[:60] + ("..." if len(txt) > 60 else "")
+                ref_ext = "บันทึกข้อความ/คำสั่งอ้างอิง"
 
-            # พพิจารณาปรับสูตรตามประเภทงาน
-            if "บริการ" in eval_category:
-                formula_extracted = "(6ชมx3วันx0.5)"
-                hours_extracted = 9.0
+            # ปรับสูตรตามหมวดงาน
+            if "วิจัย" in eval_category:
+                formula_ext = "(บทความวารสาร TCI กลุ่ม 1 = 19 ภาระงาน)"
+                hours_ext = 19.0
+            elif "บริการ" in eval_category:
+                formula_ext = "(6ชมx3วันx0.5)"
+                hours_ext = 9.0
             elif "ทำนุบำรุง" in eval_category:
-                formula_extracted = "(= 2วัน x 0.5)"
-                hours_extracted = 1.0
-            elif "วิจัย" in eval_category:
-                formula_extracted = "(บทความวารสาร TCI กลุ่ม 1 = 19 ภาระงาน)"
-                hours_extracted = 19.0
+                formula_ext = "(= 2วัน x 0.5)"
+                hours_ext = 1.0
             elif "บริหาร" in eval_category:
-                formula_extracted = "(= 15 ภาระงาน)"
-                hours_extracted = 15.0
+                formula_ext = "(= 15 ภาระงาน)"
+                hours_ext = 15.0
 
-            drafted_formal = f"{title_extracted} {venue_extracted} {date_extracted} ({ref_extracted}) = {formula_extracted} = {hours_extracted:.1f} ชม."
+            drafted_formal = f"{title_ext} {venue_ext} {date_ext} ({ref_ext}) = {formula_ext} = {hours_ext:.1f} ชม."
 
-            st.session_state["ai_evaluated"] = {
-                "category": eval_category,
-                "title": title_extracted,
-                "venue": venue_extracted,
-                "date": date_extracted,
-                "ref": ref_extracted,
-                "formula": formula_extracted,
-                "hours": float(hours_extracted),
-                "formal_text": drafted_formal
-            }
+            # CRITICAL FIX: อัปเดตเข้า Session State Keys ของ Widget โดยตรง เพื่อให้หน้าจอขั้นตอนที่ 2 เปลี่ยนตามทันที!
+            st.session_state["edit_cat"] = eval_category
+            st.session_state["edit_title"] = title_ext
+            st.session_state["edit_venue"] = venue_ext
+            st.session_state["edit_date"] = date_ext
+            st.session_state["edit_ref"] = ref_ext
+            st.session_state["edit_formula"] = formula_ext
+            st.session_state["edit_hours"] = float(hours_ext)
+            st.session_state["edit_formal_text"] = drafted_formal
+            st.session_state["ai_just_extracted"] = True
 
     with col_b:
         st.subheader("🤖 ขั้นตอนที่ 2: ผลการประเมินจาก AI (ปรับแก้ได้ทุกช่อง)")
         
-        # แสดงฟอร์มที่ AI ร่างให้ (หรือฟอร์มว่างสำหรับเติม)
-        ai_data = st.session_state.get("ai_evaluated", {
-            "category": "3. ภาระงานบริการวิชาการ",
-            "title": "โครงการอบรมเชิงปฏิบัติการพัฒนาทักษะการเรียนรู้เชิงรุก",
-            "venue": "ณ มหาวิทยาลัยราชภัฏสงขลา",
-            "date": "ระหว่างวันที่ 10-12 สิงหาคม 2569",
-            "ref": "คำสั่ง มรภ.สงขลา ที่ 123/2569",
-            "formula": "(6ชมx3วันx0.5)",
-            "hours": 9.0,
-            "formal_text": "วิทยากรโครงการอบรมเชิงปฏิบัติการพัฒนาทักษะการเรียนรู้เชิงรุก ณ มหาวิทยาลัยราชภัฏสงขลา ระหว่างวันที่ 10-12 สิงหาคม 2569 (คำสั่ง มรภ.สงขลา ที่ 123/2569) = (6ชมx3วันx0.5) = 9.0 ชม."
-        })
+        if st.session_state.get("ai_just_extracted"):
+            st.success("✅ AI สกัดและร่างข้อความทางการให้เรียบร้อยแล้ว! สามารถตรวจสอบและปรับแก้ไขทุกช่องได้ด้านล่างนี้เลยครับ")
+            st.session_state["ai_just_extracted"] = False
+        else:
+            st.markdown("<div class='info-alert'>💡 <b>กดปุ่ม '🤖 ให้ AI สกัด...' ในขั้นตอนที่ 1</b> ระบบจะประเมินและร่างข้อความทางการให้โดยอัตโนมัติ คุณสามารถพิมพ์แก้ไขทุกช่องได้ทันที</div>", unsafe_allow_html=True)
 
-        st.markdown("<div class='card-box'>💡 <b>AI ได้สกัดและร่างข้อความทางการให้แล้ว คุณสามารถตรวจสอบและพิมพ์แก้ไขเพิ่มเติมทุกช่องได้ทันทีก่อนกดบันทึก:</b></div>", unsafe_allow_html=True)
+        # ค่าตั้งต้นใน Session State (ถ้ายังไม่มีให้สร้าง)
+        if "edit_cat" not in st.session_state: st.session_state["edit_cat"] = "3. ภาระงานบริการวิชาการ"
+        if "edit_title" not in st.session_state: st.session_state["edit_title"] = "โครงการพัฒนาและส่งเสริมศักยภาพชุมชนท้องถิ่น"
+        if "edit_venue" not in st.session_state: st.session_state["edit_venue"] = "ณ มหาวิทยาลัยราชภัฏสงขลา"
+        if "edit_date" not in st.session_state: st.session_state["edit_date"] = "ระหว่างวันที่ 15-17 สิงหาคม 2569"
+        if "edit_ref" not in st.session_state: st.session_state["edit_ref"] = "คำสั่ง มรภ.สงขลา ที่ 456/2569"
+        if "edit_formula" not in st.session_state: st.session_state["edit_formula"] = "(6ชมx3วันx0.5)"
+        if "edit_hours" not in st.session_state: st.session_state["edit_hours"] = 9.0
 
         final_cat = st.selectbox("📂 หมวดภาระงาน:", [
             "1. ภาระงานสอน",
@@ -296,26 +312,29 @@ with tab1:
             "5. ภาระงานอื่น ๆ / งานสนับสนุน / คำสั่งเฉพาะกิจ",
             "6. งานประกันคุณภาพการศึกษา (QA)",
             "7. งานบริหาร / ตำแหน่งทางวิชาการ"
-        ], index=2 if "บริการ" in ai_data["category"] else 0, key="edit_cat")
+        ], key="edit_cat")
 
         c_f1, c_f2 = st.columns(2)
         with c_f1:
-            final_title = st.text_input("1. ชื่อบทบาท / โครงการ / ผลงาน:", value=ai_data["title"], key="edit_title")
-            final_date = st.text_input("3. วันที่ปฏิบัติงาน:", value=ai_data["date"], key="edit_date")
-            final_formula = st.text_input("5. สูตรคำนวณ (ในวงเล็บ):", value=ai_data["formula"], key="edit_formula")
+            final_title = st.text_input("1. ชื่อบทบาท / โครงการ / ผลงาน:", key="edit_title")
+            final_date = st.text_input("3. วันที่ปฏิบัติงาน:", key="edit_date")
+            final_formula = st.text_input("5. สูตรคำนวณ (ในวงเล็บ):", key="edit_formula")
         with c_f2:
-            final_venue = st.text_input("2. สถานที่จัด / หน่วยงาน:", value=ai_data["venue"], key="edit_venue")
-            final_ref = st.text_input("4. เลขที่คำสั่ง / หนังสืออ้างอิง:", value=ai_data["ref"], key="edit_ref")
-            final_hours = st.number_input("6. สรุปชั่วโมงภาระงานสุทธิ:", value=float(ai_data["hours"]), step=0.5, key="edit_hours")
+            final_venue = st.text_input("2. สถานที่จัด / หน่วยงาน:", key="edit_venue")
+            final_ref = st.text_input("4. เลขที่คำสั่ง / หนังสืออ้างอิง:", key="edit_ref")
+            final_hours = st.number_input("6. สรุปชั่วโมงภาระงานสุทธิ:", step=0.5, key="edit_hours")
 
-        # สร้างร่างข้อความรวมอัตโนมัติสดๆ
-        auto_composed_text = f"{final_title} {final_venue} {final_date} ({final_ref}) = {final_formula} = {final_hours:.1f} ชม."
+        # สร้างข้อความทางการที่อัปเดตแบบเรียลไทม์
+        composed_live_text = f"{final_title} {final_venue} {final_date} ({final_ref}) = {final_formula} = {final_hours:.1f} ชม."
+
+        # ซิงค์เข้า text_area
+        if "edit_formal_text" not in st.session_state:
+            st.session_state["edit_formal_text"] = composed_live_text
 
         final_formal_text = st.text_area(
             "📝 ข้อความภาษาทางการฉบับสมบูรณ์ (ที่จะบันทึกลงตารางและไฟล์ Word):",
-            value=auto_composed_text,
-            height=120,
-            key="edit_formal_text"
+            key="edit_formal_text",
+            height=120
         )
 
         st.markdown(f"""
@@ -326,97 +345,95 @@ with tab1:
         </div>
         """, unsafe_allow_html=True)
 
-        if st.button("💾 บันทึกลงคลังภาระงานสะสม (ซิงค์ Cloud)", type="primary", use_container_width=True):
-            if not user_email or user_email.strip() == "":
-                st.error("⚠️ กรุณากรอกอีเมลบุคลากรในแถบข้างด้านซ้ายก่อนกดบันทึก เพื่อซิงค์คลังข้อมูลของคุณ!")
+        # ปุ่มบันทึกลงคลังภาระงานสะสม
+        btn_save_item = st.button("💾 บันทึกลงคลังภาระงานสะสม (ซิงค์ Cloud)", type="primary", use_container_width=True)
+
+        if btn_save_item:
+            save_email = effective_email
+            
+            new_entry = {
+                "email": save_email,
+                "หมวดงาน": final_cat,
+                "รายการภาระงาน": final_formal_text,
+                "เลขคำสั่ง_อ้างอิง": final_ref,
+                "วันที่": final_date,
+                "ภาระงาน_ชม": float(final_hours),
+                "วันที่บันทึก": datetime.now().strftime("%Y-%m-%d %H:%M")
+            }
+            
+            updated_all_df = pd.concat([all_data_df, pd.DataFrame([new_entry])], ignore_index=True)
+            success, msg = save_all_data(updated_all_df)
+            
+            if success:
+                st.balloons()
+                st.toast("🎉 บันทึกข้อมูลเข้าคลังภาระงานเรียบร้อยแล้ว!", icon="✅")
+                st.success(f"🎉 บันทึกรายการภาระงานสำหรับผู้ใช้ '{save_email}' ลงคลังสะสมเรียบร้อยแล้ว! สามารถสลับไปดูตารางใน Tab 2 หรือดาวน์โหลดไฟล์ Word ใน Tab 3 ได้ทันที")
+                st.session_state["show_saved_success"] = True
             else:
-                new_entry = {
-                    "email": user_email.strip(),
-                    "หมวดงาน": final_cat,
-                    "รายการภาระงาน": final_formal_text,
-                    "เลขคำสั่ง_อ้างอิง": final_ref,
-                    "วันที่": final_date,
-                    "ภาระงาน_ชม": float(final_hours),
-                    "วันที่บันทึก": datetime.now().strftime("%Y-%m-%d %H:%M")
-                }
-                
-                updated_all_df = pd.concat([all_data_df, pd.DataFrame([new_entry])], ignore_index=True)
-                success, msg = save_all_data(updated_all_df)
-                
-                if success:
-                    st.balloons()
-                    st.toast("🎉 บันทึกข้อมูลเรียบร้อยแล้ว!", icon="✅")
-                    st.session_state["show_saved_success"] = True
-                    st.rerun()
-                else:
-                    st.error(f"เกิดข้อผิดพลาดในการบันทึก: {msg}")
+                st.error(f"เกิดข้อผิดพลาดในการบันทึก: {msg}")
 
 # ---------------------------------------------------------
 # TAB 2: คลังภาระงานสะสม (ซิงค์ Cloud / Local)
 # ---------------------------------------------------------
 with tab2:
-    current_user_display = user_email if user_email else "กรุณากรอกอีเมลในเมนูด้านซ้าย"
-    st.subheader(f"📊 คลังภาระงานสะสมของ: {current_user_display}")
+    st.subheader(f"📊 คลังภาระงานสะสมของผู้ใช้: {effective_email}")
     
     current_all_df = load_all_data()
     
-    if not user_email:
-        st.warning("👈 กรุณากรอกอีเมลบุคลากรของคุณในเมนูด้านซ้าย เพื่อเรียกดูและซิงค์ข้อมูลภาระงานสะสม")
+    user_df = current_all_df[current_all_df["email"] == effective_email].copy() if "email" in current_all_df.columns and not current_all_df.empty else pd.DataFrame()
+    
+    if user_df.empty or len(user_df) == 0:
+        st.info(f"👋 ขณะนี้คลังภาระงานของผู้ใช้ '{effective_email}' ยังว่างเปล่า สามารถเริ่มบันทึกรายการแรกได้ใน Tab 1 ครับ")
     else:
-        user_df = current_all_df[current_all_df["email"] == user_email.strip()].copy() if "email" in current_all_df.columns and not current_all_df.empty else pd.DataFrame()
+        st.markdown("💡 **อาจารย์สามารถแก้ไขข้อความ หรือลบรายการในตารางได้โดยตรง แล้วกดปุ่มบันทึกด้านล่าง:**")
         
-        if user_df.empty or len(user_df) == 0:
-            st.info("👋 ขณะนี้คลังภาระงานของคุณยังว่างเปล่า สามารถเริ่มบันทึกรายการแรกได้ใน Tab 1 ครับ")
-        else:
-            st.markdown("💡 **อาจารย์สามารถแก้ไขข้อความ หรือลบรายการในตารางได้โดยตรง แล้วกดปุ่มบันทึกด้านล่าง:**")
-            
-            display_cols = ["หมวดงาน", "รายการภาระงาน", "เลขคำสั่ง_อ้างอิง", "วันที่", "ภาระงาน_ชม"]
-            for c in display_cols:
-                if c not in user_df.columns:
-                    user_df[c] = "" if c != "ภาระงาน_ชม" else 0.0
+        display_cols = ["หมวดงาน", "รายการภาระงาน", "เลขคำสั่ง_อ้างอิง", "วันที่", "ภาระงาน_ชม"]
+        for c in display_cols:
+            if c not in user_df.columns:
+                user_df[c] = "" if c != "ภาระงาน_ชม" else 0.0
 
-            edited_user_df = st.data_editor(
-                user_df[display_cols],
-                use_container_width=True,
-                num_rows="dynamic",
-                key="user_data_editor_v8"
-            )
+        edited_user_df = st.data_editor(
+            user_df[display_cols],
+            use_container_width=True,
+            num_rows="dynamic",
+            key="user_data_editor_v9"
+        )
+        
+        col_m1, col_m2, col_m3 = st.columns([1.5, 1, 1])
+        with col_m1:
+            total_user_hours = pd.to_numeric(edited_user_df["ภาระงาน_ชม"], errors="coerce").sum()
+            st.metric(label="📈 รวมภาระงานสะสมสุทธิ", value=f"{total_user_hours:.1f} ภาระงาน (ชั่วโมง)")
             
-            col_m1, col_m2, col_m3 = st.columns([1.5, 1, 1])
-            with col_m1:
-                total_user_hours = pd.to_numeric(edited_user_df["ภาระงาน_ชม"], errors="coerce").sum()
-                st.metric(label="📈 รวมภาระงานสะสมสุทธิ", value=f"{total_user_hours:.1f} ภาระงาน (ชั่วโมง)")
+        with col_m2:
+            if st.button("🔄 บันทึกการแก้ไขลง Google Sheets", type="primary", use_container_width=True):
+                other_users_df = current_all_df[current_all_df["email"] != effective_email] if "email" in current_all_df.columns else pd.DataFrame()
                 
-            with col_m2:
-                if st.button("🔄 บันทึกการแก้ไขลง Google Sheets", type="primary", use_container_width=True):
-                    other_users_df = current_all_df[current_all_df["email"] != user_email.strip()] if "email" in current_all_df.columns else pd.DataFrame()
-                    
-                    edited_user_df["email"] = user_email.strip()
-                    edited_user_df["วันที่บันทึก"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    
-                    new_all_df = pd.concat([other_users_df, edited_user_df], ignore_index=True)
-                    ok, err = save_all_data(new_all_df)
-                    if ok:
-                        st.success("บันทึกการปรับเปลี่ยนลงฐานข้อมูลเรียบร้อยแล้ว!")
-                        st.rerun()
-                    else:
-                        st.error(f"ไม่สามารถบันทึกได้: {err}")
-
-            with col_m3:
-                if st.button("🗑️ ลบข้อมูลทั้งหมดของคุณ", type="secondary", use_container_width=True):
-                    other_users_df = current_all_df[current_all_df["email"] != user_email.strip()] if "email" in current_all_df.columns else pd.DataFrame()
-                    save_all_data(other_users_df)
-                    st.warning("เคลียร์คลังภาระงานของคุณเรียบร้อยแล้ว!")
+                edited_user_df["email"] = effective_email
+                edited_user_df["วันที่บันทึก"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                
+                new_all_df = pd.concat([other_users_df, edited_user_df], ignore_index=True)
+                ok, err = save_all_data(new_all_df)
+                if ok:
+                    st.success("บันทึกการปรับเปลี่ยนลงฐานข้อมูลเรียบร้อยแล้ว!")
                     st.rerun()
+                else:
+                    st.error(f"ไม่สามารถบันทึกได้: {err}")
+
+        with col_m3:
+            if st.button("🗑️ ลบข้อมูลทั้งหมดของคุณ", type="secondary", use_container_width=True):
+                other_users_df = current_all_df[current_all_df["email"] != effective_email] if "email" in current_all_df.columns else pd.DataFrame()
+                save_all_data(other_users_df)
+                st.warning("เคลียร์คลังภาระงานของคุณเรียบร้อยแล้ว!")
+                st.rerun()
 
 # ---------------------------------------------------------
 # TAB 3: สรุปแบบ ป-มร.สข. 01 & ดาวน์โหลดไฟล์ Word (.docx)
 # ---------------------------------------------------------
 with tab3:
-    st.subheader("📋 สรุปผลการประเมินภาระงานและสร้างไฟล์ Word (ป-มร.สข. 01)")
+    st.subheader(f"📋 สรุปผลการประเมินภาระงานและสร้างไฟล์ Word (ผู้ใช้: {effective_email})")
     
     current_all_df = load_all_data()
-    user_df = current_all_df[current_all_df["email"] == user_email.strip()].copy() if user_email and "email" in current_all_df.columns and not current_all_df.empty else pd.DataFrame()
+    user_df = current_all_df[current_all_df["email"] == effective_email].copy() if "email" in current_all_df.columns and not current_all_df.empty else pd.DataFrame()
     
     total_actual_hours = pd.to_numeric(user_df["ภาระงาน_ชม"], errors="coerce").sum() if not user_df.empty else 0.0
     
@@ -443,7 +460,7 @@ with tab3:
 
     st.divider()
 
-    def generate_docx_v8():
+    def generate_docx_v9():
         buffer = io.BytesIO()
         try:
             from docx import Document
@@ -462,7 +479,7 @@ with tab3:
             p_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
             p_sub.add_run(f'มหาวิทยาลัยราชภัฏสงขลา | รอบการประเมิน {datetime.now().strftime("%Y")}')
             
-            doc.add_paragraph(f'ผู้รับการประเมิน: {user_email if user_email else "ไม่ได้ระบุ"}')
+            doc.add_paragraph(f'ผู้รับการประเมิน: {effective_email}')
             doc.add_paragraph(f'ตำแหน่ง/สังกัด: {role}')
             doc.add_paragraph(f'กลุ่มการประเมิน: {track_type}')
             doc.add_paragraph(f'วันที่ออกรายงาน: {datetime.now().strftime("%d/%m/%Y")}')
@@ -496,13 +513,13 @@ with tab3:
             buffer.seek(0)
             return buffer
         except Exception:
-            buffer.write(f"SKRU Workload Report v8\nUser: {user_email}\nTotal Hours: {total_actual_hours}\nScore: {total_score}".encode('utf-8'))
+            buffer.write(f"SKRU Workload Report v9\nUser: {effective_email}\nTotal Hours: {total_actual_hours}\nScore: {total_score}".encode('utf-8'))
             buffer.seek(0)
             return buffer
 
-    docx_file = generate_docx_v8()
+    docx_file = generate_docx_v9()
     
-    file_email_slug = user_email.split('@')[0] if user_email and '@' in user_email else 'skru_user'
+    file_email_slug = effective_email.split('@')[0]
     st.download_button(
         label="📥 ดาวน์โหลดแบบสรุป ป-มร.สข. 01 (.docx)",
         data=docx_file,
