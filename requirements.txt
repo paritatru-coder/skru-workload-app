@@ -1,7 +1,8 @@
-streamlit
-st-gsheets-connection
-google-generativeai
+streamlit>=1.35
 pandas
-python-docx
-pdfplumber 
+requests
+st-gsheets-connection
+pdfplumber
 pypdf
+PyMuPDF
+python-docx
