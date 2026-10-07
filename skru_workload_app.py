@@ -9,7 +9,7 @@ from datetime import datetime
 import time
 import requests
 
-APP_VERSION = "v22 (Auto-Pilot & Native PDF)"
+APP_VERSION = "v23 (Unbreakable Fallback)"
 
 CATEGORIES = [
     "1. ภาระงานสอน",
@@ -90,7 +90,7 @@ def save_all_data(full_df):
     return True, "Local Session"
 
 # ---------------------------------------------------------
-# 3. Gemini API (Auto-Pilot Model Selector & Native PDF)
+# 3. Gemini API (Unbreakable Fallback Loop)
 # ---------------------------------------------------------
 class GeminiError(Exception): pass
 
@@ -141,70 +141,64 @@ def extract_json(text):
         except: pass
     raise GeminiError("AI ไม่ได้ตอบกลับมาเป็น JSON (อาจจะติดระบบความปลอดภัย)")
 
-def call_gemini(api_key, parts):
+def call_gemini(api_key, model_list, parts):
     body = {"contents": [{"parts": parts}], "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}}
     headers = {"Content-Type": "application/json"}
-    
-    # 1. ระบบ Auto-Pilot: ตรวจสอบรุ่นที่มีอยู่จริง
-    target_model = "gemini-flash-latest" # Fallback ตัวมาตรฐาน
-    try:
-        res = requests.get(f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}", timeout=10)
-        if res.status_code == 200:
-            valid_models = [m["name"].replace("models/", "") for m in res.json().get("models", []) if "generateContent" in m.get("supportedGenerationMethods", [])]
-            # จัดอันดับความสำคัญของรุ่นที่เร็วและเสถียร
-            for pref in ["gemini-2.5-flash", "gemini-flash-latest", "gemini-3.5-flash", "gemini-1.5-flash-latest"]:
-                if pref in valid_models:
-                    target_model = pref
-                    break
-    except: pass # ถ้าตรวจไม่ได้ ให้ใช้ fallback ตัวมาตรฐานไปเลย
-
-    # 2. ลองไล่ทุก Endpoint (v1beta, v1, v1alpha) เพื่อป้องกัน 404 
-    endpoints = [
-        f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={api_key}",
-        f"https://generativelanguage.googleapis.com/v1/models/{target_model}:generateContent?key={api_key}",
-        f"https://generativelanguage.googleapis.com/v1alpha/models/{target_model}:generateContent?key={api_key}"
-    ]
-    
     last_err = ""
-    for url in endpoints:
-        for attempt in range(3): # ระบบ 503 Retry
-            try: resp = requests.post(url, headers=headers, json=body, timeout=120)
-            except Exception as e: last_err = f"Network Error: {e}"; break
 
-            if resp.status_code == 200:
-                cands = resp.json().get("candidates", [])
-                if not cands: raise GeminiError("AI ประมวลผลสำเร็จแต่ไม่มีคำตอบ")
-                return extract_json(cands[0]["content"]["parts"][0]["text"]), target_model
-            
-            if resp.status_code == 503:
-                last_err = f"503 เซิร์ฟเวอร์หนาแน่น (รอ 2 วินาทีแล้วลองใหม่รอบที่ {attempt+1})..."
-                time.sleep(2)
-                continue
+    # ระบบจะไล่จากซ้ายไปขวา ถ้า 2.5 พัง จะสลับไปใช้ flash-latest ให้ทันที
+    safe_models = [m.strip() for m in model_list if m.strip()]
+    if not safe_models: safe_models = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-1.5-flash-latest"]
 
-            err_msg = resp.json().get("error", {}).get("message", resp.text[:150]) if "error" in resp.text else resp.text[:150]
-            if resp.status_code == 404: 
-                last_err = f"404 ไม่พบรุ่น {target_model} ใน Endpoint นี้"
-                break # เปลี่ยนไปลอง API Version ถัดไป
+    for model in safe_models:
+        endpoints = [
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
+            f"https://generativelanguage.googleapis.com/v1alpha/models/{model}:generateContent?key={api_key}",
+            f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={api_key}"
+        ]
+        
+        for url in endpoints:
+            for attempt in range(2): # รอรับ 503 ได้ 2 รอบต่อ URL
+                try: 
+                    resp = requests.post(url, headers=headers, json=body, timeout=60)
+                except Exception as e: 
+                    last_err = f"Network Error: {e}"; break
+
+                if resp.status_code == 200:
+                    cands = resp.json().get("candidates", [])
+                    if not cands: raise GeminiError("AI ประมวลผลสำเร็จแต่ไม่มีคำตอบ")
+                    return extract_json(cands[0]["content"]["parts"][0]["text"]), model
                 
-            if resp.status_code in (401, 403): raise GeminiError(f"API Key ผิด/ไม่มีสิทธิ์: {err_msg}")
-            if resp.status_code == 400: raise GeminiError(f"400 Bad Request (ไฟล์ภาพอาจใหญ่ไป หรือรูปแบบผิด): {err_msg}")
+                if resp.status_code == 503:
+                    last_err = f"503 เซิร์ฟเวอร์หนาแน่น (รอ 2 วิ แล้วลองใหม่)..."
+                    time.sleep(2)
+                    continue
+
+                err_msg = resp.json().get("error", {}).get("message", resp.text[:150]) if "error" in resp.text else resp.text[:150]
+                
+                if resp.status_code == 404: 
+                    last_err = f"404 ไม่พบรุ่น {model} ที่ Endpoint นี้"
+                    break # เจอ 404 ไม่ต้องฝืนซ้ำ ให้ข้ามไปลอง Endpoint ถัดไป
+                    
+                if resp.status_code in (401, 403): raise GeminiError(f"API Key ผิด/ไม่มีสิทธิ์: {err_msg}")
+                if resp.status_code == 400: raise GeminiError(f"400 Bad Request (ไฟล์ภาพอาจใหญ่ไป หรือรูปแบบผิด): {err_msg}")
+                
+                last_err = f"Error {resp.status_code}: {err_msg}"
+                break 
             
-            last_err = f"Error {resp.status_code}: {err_msg}"
-            break
-            
-    raise GeminiError(f"ประมวลผลไม่สำเร็จ: {last_err}")
+    raise GeminiError(f"ทดลองครบทุกรุ่นแล้วไม่สำเร็จ: {last_err}")
 
 def inline_part(data_bytes, mime):
     return {"inlineData": {"mimeType": mime, "data": base64.b64encode(data_bytes).decode("ascii")}}
 
-def analyze_with_gemini(api_key, file_bytes, mime, category_hint, typed_text=""):
+def analyze_with_gemini(api_key, model_list, file_bytes, mime, category_hint, typed_text=""):
     prompt = build_prompt(category_hint, typed_text)
     
-    # ส่งไฟล์ PDF และ Image ตรงๆ ไปให้ AI โดยไม่แปลงภาพ (ประหยัดเวลาและลดโอกาสเกิด 503)
+    # ส่ง PDF ดิบๆ เข้าไปเลย ไม่ต้องพึ่งไลบรารีแปลงภาพ เพื่อลดความใหญ่ของไฟล์
     if file_bytes:
-        return call_gemini(api_key, [{"text": prompt}, inline_part(file_bytes, mime)])
+        return call_gemini(api_key, model_list, [{"text": prompt}, inline_part(file_bytes, mime)])
     else:
-        return call_gemini(api_key, [{"text": prompt}])
+        return call_gemini(api_key, model_list, [{"text": prompt}])
 
 # ---------------------------------------------------------
 # 4. Core Normalization Logic
@@ -267,8 +261,16 @@ with st.sidebar:
     user_api_key = st.text_input("🔑 Gemini API Key:", type="password", value="", placeholder="ใช้ค่าจาก Secrets อยู่" if api_key_env else "")
     active_api_key = user_api_key.strip() or api_key_env
     
+    models_input = st.text_area(
+        "🧠 รุ่น Gemini (เรียงลำดับสำรอง):", 
+        value="gemini-2.5-flash, gemini-flash-latest, gemini-1.5-flash-latest",
+        key="gemini_models_input_v23",
+        help="ถ้าตัวแรกพัง โค้ดจะสลับไปใช้ตัวถัดไปให้อัตโนมัติ"
+    )
+    user_models = [m.strip() for m in models_input.split(",") if m.strip()]
+
     if active_api_key: 
-        st.success("🟢 พบ API Key (ระบบ AI ทำงานอัตโนมัติ)")
+        st.success("🟢 พบ API Key")
     else: 
         st.warning("🟡 ไม่มี API Key")
 
@@ -288,7 +290,6 @@ with tab1:
         st.subheader("1. อัปโหลดเอกสาร")
         cat_in = st.selectbox("📂 หมวดงานเบื้องต้น:", [AUTO_CATEGORY] + CATEGORIES)
         
-        # คืนระบบกล้องถ่ายรูปสำหรับมือถือ
         method = st.radio("วิธีป้อนข้อมูล:", ["📤 ไฟล์ (PDF, PNG, JPG)", "📷 ถ่ายภาพกล้องมือถือ", "✍️ พิมพ์เอง"])
         file_up, text_in = None, ""
         if "ไฟล์" in method: file_up = st.file_uploader("แนบเอกสาร:", type=["pdf", "png", "jpg", "jpeg"])
@@ -298,7 +299,7 @@ with tab1:
         if st.button("🤖 ให้ AI อ่านเอกสาร", type="primary", use_container_width=True):
             if not file_up and not text_in.strip(): st.warning("⚠️ โปรดแนบไฟล์หรือข้อความ")
             else:
-                with st.spinner("กำลังให้ AI วิเคราะห์เอกสาร (Auto-Pilot)..."):
+                with st.spinner("กำลังให้ AI วิเคราะห์เอกสาร... (ถ้าช้า ระบบจะสลับรุ่นสำรองให้เอง)"):
                     result, notice = None, None
                     try:
                         f_bytes, f_name, mime, t_text = b"", "", "", ""
@@ -308,7 +309,7 @@ with tab1:
                             t_text = text_in.strip()
 
                         if active_api_key:
-                            raw_json, used_model = analyze_with_gemini(active_api_key, f_bytes, mime, cat_in, t_text)
+                            raw_json, used_model = analyze_with_gemini(active_api_key, user_models, f_bytes, mime, cat_in, t_text)
                             result = finalize_result(raw_json, f_name, cat_in)
                             notice = ("success", f"✅ อ่านสำเร็จด้วยรุ่น {used_model}" + (" | 🎯 ปรับคะแนนเป็น 24.0 อัตโนมัติ" if result["rule_applied"] else ""))
                         else: notice = ("warning", "⚠️ ไม่มี API Key ใช้โหมดกรอกเอง")
