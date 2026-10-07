@@ -9,12 +9,7 @@ from datetime import datetime
 import time
 import requests
 
-try:
-    import pdfplumber
-except ImportError:
-    pdfplumber = None
-
-APP_VERSION = "v21 (Next-Gen Exclusive)"
+APP_VERSION = "v22 (Auto-Pilot & Native PDF)"
 
 CATEGORIES = [
     "1. ภาระงานสอน",
@@ -95,29 +90,7 @@ def save_all_data(full_df):
     return True, "Local Session"
 
 # ---------------------------------------------------------
-# 3. Text Extraction Fallback (ถ้า AI พัง)
-# ---------------------------------------------------------
-def extract_text_from_pdf_bytes(file_bytes):
-    text = ""
-    if pdfplumber:
-        try:
-            with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-                for page in pdf.pages:
-                    t = page.extract_text()
-                    if t: text += t + "\n"
-        except: pass
-    if not text.strip():
-        try:
-            import pypdf
-            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-            for page in reader.pages:
-                t = page.extract_text()
-                if t: text += t + "\n"
-        except: pass
-    return text.strip()
-
-# ---------------------------------------------------------
-# 4. Gemini API Logic
+# 3. Gemini API (Auto-Pilot Model Selector & Native PDF)
 # ---------------------------------------------------------
 class GeminiError(Exception): pass
 
@@ -137,10 +110,10 @@ RUBRIC_TEXT = """
    -> สูตรตัวอย่าง: (นับสิทธิ์เผยแพร่ระดับชาติ = 10 ภาระงาน) หรือ (นับสิทธิ์เผยแพร่นานาชาติ ที่ได้รับรางวัล = 24 ภาระงาน)
 """
 
-def build_prompt(category_hint, local_text):
+def build_prompt(category_hint, typed_text):
     hint_line = f"ผู้ใช้ระบุหมวดงาน: {category_hint}\n" if category_hint and category_hint != AUTO_CATEGORY else ""
     prompt = (
-        "คุณคือผู้ช่วยตรวจเอกสารภาระงาน มรภ.สงขลา สกัดข้อมูลจริงจากเอกสารเท่านั้น\n\n"
+        "คุณคือผู้ช่วยตรวจเอกสารภาระงาน มรภ.สงขลา สกัดข้อมูลจริงจากเอกสาร (PDF สแกน หรือข้อความ) ที่แนบมาเท่านั้น\n\n"
         + hint_line +
         "กติกาสำคัญ:\n"
         "1. ห้ามใช้ชื่อไฟล์ (.pdf/.png/.jpg) เป็นข้อมูลใดๆ\n"
@@ -157,7 +130,7 @@ def build_prompt(category_hint, local_text):
         "\nตอบเป็น JSON ล้วนๆ ห้ามมี Markdown:\n"
         '{"category": "", "title": "", "venue": "", "date": "", "ref": "", "level": "", "has_award": false, "formula": "", "hours": 0.0, "raw_text": "", "notes": ""}'
     )
-    if local_text: prompt += "\nข้อความที่ดึงได้เบื้องต้น:\n" + local_text[:6000]
+    if typed_text: prompt += "\n\nข้อความจากผู้ใช้:\n" + typed_text[:8000]
     return prompt
 
 def extract_json(text):
@@ -166,58 +139,75 @@ def extract_json(text):
     if m:
         try: return json.loads(m.group(0))
         except: pass
-    raise GeminiError("AI ไม่ได้ตอบเป็น JSON")
+    raise GeminiError("AI ไม่ได้ตอบกลับมาเป็น JSON (อาจจะติดระบบความปลอดภัย)")
 
-def call_gemini(api_key, model_list, parts):
+def call_gemini(api_key, parts):
     body = {"contents": [{"parts": parts}], "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}}
     headers = {"Content-Type": "application/json"}
+    
+    # 1. ระบบ Auto-Pilot: ตรวจสอบรุ่นที่มีอยู่จริง
+    target_model = "gemini-flash-latest" # Fallback ตัวมาตรฐาน
+    try:
+        res = requests.get(f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}", timeout=10)
+        if res.status_code == 200:
+            valid_models = [m["name"].replace("models/", "") for m in res.json().get("models", []) if "generateContent" in m.get("supportedGenerationMethods", [])]
+            # จัดอันดับความสำคัญของรุ่นที่เร็วและเสถียร
+            for pref in ["gemini-2.5-flash", "gemini-flash-latest", "gemini-3.5-flash", "gemini-1.5-flash-latest"]:
+                if pref in valid_models:
+                    target_model = pref
+                    break
+    except: pass # ถ้าตรวจไม่ได้ ให้ใช้ fallback ตัวมาตรฐานไปเลย
+
+    # 2. ลองไล่ทุก Endpoint (v1beta, v1, v1alpha) เพื่อป้องกัน 404 
+    endpoints = [
+        f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={api_key}",
+        f"https://generativelanguage.googleapis.com/v1/models/{target_model}:generateContent?key={api_key}",
+        f"https://generativelanguage.googleapis.com/v1alpha/models/{target_model}:generateContent?key={api_key}"
+    ]
+    
     last_err = ""
+    for url in endpoints:
+        for attempt in range(3): # ระบบ 503 Retry
+            try: resp = requests.post(url, headers=headers, json=body, timeout=120)
+            except Exception as e: last_err = f"Network Error: {e}"; break
 
-    # ใช้เฉพาะโมเดลที่คุณกรอกมาในหน้าเว็บเท่านั้น ไม่มีฮาร์ดโค้ดขยะแอบแฝง
-    safe_models = [m.strip() for m in model_list if m.strip()]
-    if not safe_models: safe_models = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
-
-    for model in safe_models:
-        endpoints = [
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
-            f"https://generativelanguage.googleapis.com/v1alpha/models/{model}:generateContent?key={api_key}"
-        ]
-        
-        for url in endpoints:
-            for attempt in range(3):
-                try: resp = requests.post(url, headers=headers, json=body, timeout=60)
-                except Exception as e: last_err = f"เชื่อมต่อไม่ได้: {e}"; break
-
-                if resp.status_code == 200:
-                    cands = resp.json().get("candidates", [])
-                    if not cands: raise GeminiError("AI ประมวลผลสำเร็จแต่ไม่ส่งข้อความกลับมา")
-                    return extract_json(cands[0]["content"]["parts"][0]["text"]), model
-                
-                if resp.status_code == 503:
-                    last_err = f"503 High Demand (รุ่น {model}) - ลองส่งใหม่รอบที่ {attempt+1}..."
-                    time.sleep(2)
-                    continue
-
-                err_msg = resp.json().get("error", {}).get("message", resp.text[:150]) if "error" in resp.text else resp.text[:150]
-                if resp.status_code == 404: last_err = f"404 Not Found (ไม่มีรุ่น {model})"; break 
-                if resp.status_code in (401, 403): raise GeminiError(f"API Key ผิด/ไม่มีสิทธิ์: {err_msg}")
-                if resp.status_code == 400: raise GeminiError(f"400 Bad Request (ไฟล์อาจมีปัญหา): {err_msg}")
-                
-                last_err = f"Error {resp.status_code}: {err_msg}"
-                break
+            if resp.status_code == 200:
+                cands = resp.json().get("candidates", [])
+                if not cands: raise GeminiError("AI ประมวลผลสำเร็จแต่ไม่มีคำตอบ")
+                return extract_json(cands[0]["content"]["parts"][0]["text"]), target_model
             
-    raise GeminiError(f"ทดสอบโมเดลของคุณไม่สำเร็จ: {last_err}")
+            if resp.status_code == 503:
+                last_err = f"503 เซิร์ฟเวอร์หนาแน่น (รอ 2 วินาทีแล้วลองใหม่รอบที่ {attempt+1})..."
+                time.sleep(2)
+                continue
+
+            err_msg = resp.json().get("error", {}).get("message", resp.text[:150]) if "error" in resp.text else resp.text[:150]
+            if resp.status_code == 404: 
+                last_err = f"404 ไม่พบรุ่น {target_model} ใน Endpoint นี้"
+                break # เปลี่ยนไปลอง API Version ถัดไป
+                
+            if resp.status_code in (401, 403): raise GeminiError(f"API Key ผิด/ไม่มีสิทธิ์: {err_msg}")
+            if resp.status_code == 400: raise GeminiError(f"400 Bad Request (ไฟล์ภาพอาจใหญ่ไป หรือรูปแบบผิด): {err_msg}")
+            
+            last_err = f"Error {resp.status_code}: {err_msg}"
+            break
+            
+    raise GeminiError(f"ประมวลผลไม่สำเร็จ: {last_err}")
 
 def inline_part(data_bytes, mime):
     return {"inlineData": {"mimeType": mime, "data": base64.b64encode(data_bytes).decode("ascii")}}
 
-def analyze_with_gemini(api_key, model_list, file_bytes, mime, local_text, category_hint, typed_text=""):
-    prompt = build_prompt(category_hint, local_text)
-    if typed_text: return call_gemini(api_key, model_list, [{"text": prompt + f"\n\n{typed_text[:8000]}"}])
-    return call_gemini(api_key, model_list, [{"text": prompt}, inline_part(file_bytes, mime)])
+def analyze_with_gemini(api_key, file_bytes, mime, category_hint, typed_text=""):
+    prompt = build_prompt(category_hint, typed_text)
+    
+    # ส่งไฟล์ PDF และ Image ตรงๆ ไปให้ AI โดยไม่แปลงภาพ (ประหยัดเวลาและลดโอกาสเกิด 503)
+    if file_bytes:
+        return call_gemini(api_key, [{"text": prompt}, inline_part(file_bytes, mime)])
+    else:
+        return call_gemini(api_key, [{"text": prompt}])
 
 # ---------------------------------------------------------
-# 5. Core Normalization Logic
+# 4. Core Normalization Logic
 # ---------------------------------------------------------
 AWARD_KEYWORDS = ["ดีเยี่ยม", "excellent", "รางวัล", "award"]
 INTL_KEYWORDS = ["นานาชาติ", "international", "intl"]
@@ -244,7 +234,7 @@ def compose_formal_text(title, venue, date, ref, formula, hours):
         return f"{head} = {formula} = {hours:.1f} ชม."
     return f"{head} = {hours:.1f} ชม."
 
-def finalize_result(raw, evidence_text, filename, category_hint):
+def finalize_result(raw, filename, category_hint):
     cat = raw.get("category", "")
     if cat not in CATEGORIES: cat = category_hint if category_hint in CATEGORIES else CATEGORIES[1]
     title, venue, date_str, ref = clean_field(raw.get("title"), filename), clean_field(raw.get("venue"), filename), clean_field(raw.get("date"), filename), clean_field(raw.get("ref"), filename)
@@ -252,7 +242,7 @@ def finalize_result(raw, evidence_text, filename, category_hint):
     try: hours = float(raw.get("hours", 0.0))
     except: hours = 0.0
 
-    all_text = " ".join([evidence_text or "", str(raw.get("raw_text", "")), title, venue, ref, formula, level, notes])
+    all_text = " ".join([str(raw.get("raw_text", "")), title, venue, ref, formula, level, notes])
     rule_applied = False
 
     if cat == CATEGORIES[1] and (("นานาชาติ" in level or any(k in all_text.lower() for k in INTL_KEYWORDS)) and (raw.get("has_award") or any(k in all_text.lower() for k in AWARD_KEYWORDS))):
@@ -265,7 +255,7 @@ def guess_mime(uploaded):
     return mimetypes.guess_type(uploaded.name)[0] or "application/pdf"
 
 # ---------------------------------------------------------
-# 6. UI Structure
+# 5. UI Structure
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("👤 ตั้งค่า")
@@ -277,27 +267,8 @@ with st.sidebar:
     user_api_key = st.text_input("🔑 Gemini API Key:", type="password", value="", placeholder="ใช้ค่าจาก Secrets อยู่" if api_key_env else "")
     active_api_key = user_api_key.strip() or api_key_env
     
-    models_input = st.text_area(
-        "🧠 รุ่น Gemini (เรียงลำดับสำรอง):", 
-        value="gemini-2.5-flash-lite, gemini-2.5-flash",
-        key="gemini_models_input_v21",
-        help="คั่นด้วยลูกน้ำ (,) ระบบจะลองไปเรื่อยๆ"
-    )
-    user_models = [m.strip() for m in models_input.split(",") if m.strip()]
-
     if active_api_key: 
-        st.success("🟢 พบ API Key")
-        if st.button("🔍 เช็ครุ่น AI ที่ใช้ได้จริง", use_container_width=True):
-            with st.spinner("กำลังถาม Google..."):
-                try:
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={active_api_key}"
-                    res = requests.get(url, timeout=10)
-                    if res.status_code == 200:
-                        m_list = [m["name"].replace("models/", "") for m in res.json().get("models", []) if "gemini" in m.get("name", "").lower() and "generateContent" in m.get("supportedGenerationMethods", [])]
-                        if m_list: st.success(f"✅ รุ่นที่คุณมีสิทธิ์ใช้:\n\n" + "\n".join([f"- {x}" for x in m_list]))
-                        else: st.warning("ไม่มีรุ่น Gemini ที่รองรับ")
-                    else: st.error(f"ตรวจสอบไม่ได้: {res.text[:100]}")
-                except Exception as e: st.error(f"Error: {e}")
+        st.success("🟢 พบ API Key (ระบบ AI ทำงานอัตโนมัติ)")
     else: 
         st.warning("🟡 ไม่มี API Key")
 
@@ -317,7 +288,8 @@ with tab1:
         st.subheader("1. อัปโหลดเอกสาร")
         cat_in = st.selectbox("📂 หมวดงานเบื้องต้น:", [AUTO_CATEGORY] + CATEGORIES)
         
-        method = st.radio("วิธีป้อนข้อมูล:", ["📤 ไฟล์ (PDF, PNG)", "📷 ถ่ายภาพกล้องมือถือ", "✍️ พิมพ์เอง"])
+        # คืนระบบกล้องถ่ายรูปสำหรับมือถือ
+        method = st.radio("วิธีป้อนข้อมูล:", ["📤 ไฟล์ (PDF, PNG, JPG)", "📷 ถ่ายภาพกล้องมือถือ", "✍️ พิมพ์เอง"])
         file_up, text_in = None, ""
         if "ไฟล์" in method: file_up = st.file_uploader("แนบเอกสาร:", type=["pdf", "png", "jpg", "jpeg"])
         elif "กล้อง" in method: file_up = st.camera_input("ถ่ายภาพเอกสารคำสั่ง")
@@ -326,20 +298,19 @@ with tab1:
         if st.button("🤖 ให้ AI อ่านเอกสาร", type="primary", use_container_width=True):
             if not file_up and not text_in.strip(): st.warning("⚠️ โปรดแนบไฟล์หรือข้อความ")
             else:
-                with st.spinner("กำลังส่งข้อมูลวิเคราะห์..."):
+                with st.spinner("กำลังให้ AI วิเคราะห์เอกสาร (Auto-Pilot)..."):
                     result, notice = None, None
                     try:
-                        f_bytes, f_name, mime, l_text, t_text = b"", "", "", "", ""
+                        f_bytes, f_name, mime, t_text = b"", "", "", ""
                         if file_up:
                             f_bytes, f_name, mime = file_up.getvalue(), getattr(file_up, "name", "camera_image.jpg"), guess_mime(file_up)
-                            if mime == "application/pdf": l_text = extract_text_from_pdf_bytes(f_bytes)
                         else:
-                            t_text = l_text = text_in.strip()
+                            t_text = text_in.strip()
 
                         if active_api_key:
-                            raw_json, used_model = analyze_with_gemini(active_api_key, user_models, f_bytes, mime, l_text, cat_in, t_text)
-                            result = finalize_result(raw_json, l_text, f_name, cat_in)
-                            notice = ("success", f"✅ อ่านสำเร็จด้วย {used_model}" + (" | 🎯 ปรับคะแนนเป็น 24.0" if result["rule_applied"] else ""))
+                            raw_json, used_model = analyze_with_gemini(active_api_key, f_bytes, mime, cat_in, t_text)
+                            result = finalize_result(raw_json, f_name, cat_in)
+                            notice = ("success", f"✅ อ่านสำเร็จด้วยรุ่น {used_model}" + (" | 🎯 ปรับคะแนนเป็น 24.0 อัตโนมัติ" if result["rule_applied"] else ""))
                         else: notice = ("warning", "⚠️ ไม่มี API Key ใช้โหมดกรอกเอง")
                     except Exception as e:
                         notice = ("warning", f"⚠️ {e}")
@@ -365,11 +336,11 @@ with tab1:
         e_cat = st.selectbox("📂 หมวดงาน:", CATEGORIES, index=CATEGORIES.index(st.session_state.get("e_cat", CATEGORIES[1])) if st.session_state.get("e_cat") in CATEGORIES else 1)
         c1, c2 = st.columns(2)
         with c1:
-            e_title = st.text_input("1. ชื่อบทบาท:", value=st.session_state.get("e_title", ""))
+            e_title = st.text_input("1. ชื่อบทบาท/ผลงาน:", value=st.session_state.get("e_title", ""))
             e_date = st.text_input("3. วันที่:", value=st.session_state.get("e_date", ""))
             e_form = st.text_input("5. สูตรคำนวณ:", value=st.session_state.get("e_formula", ""))
         with c2:
-            e_venue = st.text_input("2. สถานที่:", value=st.session_state.get("e_venue", ""))
+            e_venue = st.text_input("2. สถานที่/จัดโดย:", value=st.session_state.get("e_venue", ""))
             e_ref = st.text_input("4. เลขที่อ้างอิง:", value=st.session_state.get("e_ref", ""))
             e_hrs = st.number_input("6. ชั่วโมงสุทธิ:", value=st.session_state.get("e_hours", 0.0), step=0.5)
 
@@ -377,7 +348,7 @@ with tab1:
         f_txt = st.text_area("📝 ข้อความทางการ:", value=live_txt, height=120)
 
         if st.button("💾 บันทึกลงคลัง", type="primary", use_container_width=True):
-            if not f_txt.strip(): st.warning("⚠️ ไม่มีข้อความ")
+            if not f_txt.strip(): st.warning("⚠️ ไม่มีข้อความให้บันทึก")
             else:
                 new_row = pd.DataFrame([{"email": email_val, "หมวดงาน": e_cat, "รายการภาระงาน": f_txt, "เลขคำสั่ง_อ้างอิง": e_ref, "วันที่": e_date, "ภาระงาน_ชม": e_hrs, "วันที่บันทึก": datetime.now().strftime("%Y-%m-%d %H:%M")}])
                 if save_all_data(pd.concat([all_data_df, new_row], ignore_index=True))[0]:
@@ -387,16 +358,16 @@ with tab1:
 with tab2:
     st.subheader(f"📊 คลังภาระงาน: {email_val}")
     u_df = all_data_df[all_data_df["email"] == email_val].copy()
-    if u_df.empty: st.info("ยังไม่มีข้อมูล")
+    if u_df.empty: st.info("ยังไม่มีข้อมูลภาระงาน")
     else:
         edited = st.data_editor(u_df[["หมวดงาน", "รายการภาระงาน", "เลขคำสั่ง_อ้างอิง", "วันที่", "ภาระงาน_ชม"]].reset_index(drop=True), use_container_width=True, num_rows="dynamic")
         st.metric("รวมชั่วโมง", f"{pd.to_numeric(edited['ภาระงาน_ชม'], errors='coerce').sum():.1f}")
         c1, c2 = st.columns(2)
-        if c1.button("🔄 อัปเดต", type="primary"):
+        if c1.button("🔄 อัปเดตตาราง", type="primary"):
             edited["email"], edited["วันที่บันทึก"] = email_val, datetime.now().strftime("%Y-%m-%d %H:%M")
             save_all_data(pd.concat([all_data_df[all_data_df["email"] != email_val], edited[edited["รายการภาระงาน"].str.strip() != ""]]))
             st.rerun()
-        if c2.button("🗑️ ลบทั้งหมด") and st.checkbox("ยืนยัน"):
+        if c2.button("🗑️ ลบทั้งหมด") and st.checkbox("ยืนยันการลบ"):
             save_all_data(all_data_df[all_data_df["email"] != email_val])
             st.rerun()
 
@@ -405,9 +376,9 @@ with tab3:
     u_df = all_data_df[all_data_df["email"] == email_val]
     t_hrs = pd.to_numeric(u_df["ภาระงาน_ชม"], errors="coerce").sum()
     c1 = min(t_hrs / 35.0, 1.0) * 70.0
-    c2 = st.number_input("คะแนนองค์ประกอบ 2:", value=30.0)
+    c2 = st.number_input("คะแนนองค์ประกอบ 2:", value=30.0, max_value=30.0)
     total_score = c1 + c2
-    st.metric("คะแนนรวม", f"{total_score:.2f} / 100")
+    st.metric("คะแนนรวมสุทธิ", f"{total_score:.2f} / 100")
 
     try:
         from docx import Document
