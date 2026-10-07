@@ -18,7 +18,7 @@ try:
 except ImportError:
     fitz = None
 
-APP_VERSION = "v16 (Time-Travel & Dynamic Model Fix)"
+APP_VERSION = "v17 (Auto-Discovery & Future-Proof)"
 
 CATEGORIES = [
     "1. ภาระงานสอน",
@@ -128,7 +128,7 @@ def extract_text_from_pdf_bytes(file_bytes):
     return text.strip()
 
 def render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=0.8):
-    if not fitz: raise RuntimeError("ไม่พบไลบรารี PyMuPDF (ทำให้ไม่สามารถแปล PDF สแกนเป็นภาพได้)")
+    if not fitz: raise RuntimeError("ไม่พบไลบรารี PyMuPDF (ทำให้ไม่สามารถแปลง PDF สแกนเป็นภาพได้)")
     images = []
     with fitz.open(stream=file_bytes, filetype="pdf") as doc:
         for i, page in enumerate(doc):
@@ -139,7 +139,7 @@ def render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=0.8):
     return images
 
 # ---------------------------------------------------------
-# 4. Gemini API (Dynamic Fallback)
+# 4. Gemini API (Auto-Discovery)
 # ---------------------------------------------------------
 class GeminiError(Exception): pass
 
@@ -191,10 +191,14 @@ def call_gemini(api_key, model_list, parts):
     headers = {"Content-Type": "application/json"}
     last_err = ""
 
-    for model in model_list:
+    # แนบ Universal Aliases ต่อท้ายกันเหนียว (รุ่นพวกนี้จะวิ่งไปหาเวอร์ชันล่าสุดอัตโนมัติ)
+    safe_models = model_list + ["gemini-flash", "gemini-pro"]
+    seen = set()
+    test_models = [x for x in safe_models if not (x in seen or seen.add(x))]
+
+    for model in test_models:
         if not model: continue
         
-        # ลองสลับ Endpoint ระหว่าง v1beta และ v1alpha อัตโนมัติเผื่อเป็นรุ่นใหม่ล่าสุด
         endpoints = [
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
             f"https://generativelanguage.googleapis.com/v1alpha/models/{model}:generateContent?key={api_key}"
@@ -215,8 +219,8 @@ def call_gemini(api_key, model_list, parts):
             err_msg = resp.json().get("error", {}).get("message", resp.text[:150]) if "error" in resp.text else resp.text[:150]
             
             if resp.status_code == 404:
-                last_err = f"404 Not Found (ไม่มีรุ่น {model} หรือไม่รองรับ API นี้)"
-                continue # ลอง Endpoint ถัดไป หรือโมเดลถัดไป
+                last_err = f"404 Not Found (ไม่มีรุ่น {model})"
+                continue 
                 
             if resp.status_code in (401, 403) or "API_KEY" in err_msg:
                 raise GeminiError(f"API Key ผิด/ไม่มีสิทธิ์: {err_msg}")
@@ -226,7 +230,18 @@ def call_gemini(api_key, model_list, parts):
                 
             last_err = f"Error {resp.status_code}: {err_msg}"
             
-    raise GeminiError(f"ทดสอบครบทุกรุ่น/Endpoint แล้วไม่สำเร็จ: {last_err}")
+    # ถ้ารันจนครบทุกรุ่นแล้วพังเรียบ ให้ดึงรายชื่อรุ่นที่ใช้งานได้จริงมาแสดงให้รู้ดำรู้แดง
+    try:
+        check_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        check_resp = requests.get(check_url, timeout=10)
+        if check_resp.status_code == 200:
+            valid_models = [m["name"].replace("models/", "") for m in check_resp.json().get("models", []) if "gemini" in m.get("name", "").lower() and "generateContent" in m.get("supportedGenerationMethods", [])]
+            if valid_models:
+                raise GeminiError(f"ไม่พบรุ่นที่คุณระบุเลย! รุ่นที่คุณมีสิทธิ์ใช้ได้จริงในตอนนี้คือ: {', '.join(valid_models)}")
+    except Exception as e:
+        if isinstance(e, GeminiError): raise e
+
+    raise GeminiError(f"ทดสอบครบทุกรุ่นแล้วไม่สำเร็จ: {last_err}")
 
 def inline_part(data_bytes, mime):
     return {"inlineData": {"mimeType": mime, "data": base64.b64encode(data_bytes).decode("ascii")}}
@@ -299,16 +314,33 @@ with st.sidebar:
     user_api_key = st.text_input("🔑 Gemini API Key:", type="password", value="", placeholder="ใช้ค่าจาก Secrets อยู่" if api_key_env else "")
     active_api_key = user_api_key.strip() or api_key_env
     
-    # คืนช่องให้ผู้ใช้พิมพ์รุ่นโมเดลตามใจชอบแล้วครับ
     models_input = st.text_area(
         "🧠 รุ่น Gemini (เรียงลำดับสำรอง):", 
-        value="gemini-2.5-flash, gemini-2.0-flash, gemini-2.0-flash-exp, gemini-1.5-pro, gemini-1.5-flash",
-        help="คั่นด้วยลูกน้ำ (,) ระบบจะลองไปเรื่อยๆ จนกว่าจะเจอตัวที่ใช้งานได้"
+        value="gemini-2.5-flash, gemini-2.0-flash, gemini-2.0-flash-exp",
+        help="คั่นด้วยลูกน้ำ (,) ระบบจะลองไปเรื่อยๆ"
     )
     user_models = [m.strip() for m in models_input.split(",") if m.strip()]
 
-    if active_api_key: st.success("🟢 พบ API Key")
-    else: st.warning("🟡 ไม่มี API Key")
+    if active_api_key: 
+        st.success("🟢 พบ API Key")
+        # ปุ่มวิเศษสำหรับตรวจสอบรุ่นที่ API Key นี้มีสิทธิ์ใช้
+        if st.button("🔍 เช็ครุ่น AI ที่ใช้ได้จริง", use_container_width=True):
+            with st.spinner("กำลังถาม Google..."):
+                try:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={active_api_key}"
+                    res = requests.get(url, timeout=10)
+                    if res.status_code == 200:
+                        m_list = [m["name"].replace("models/", "") for m in res.json().get("models", []) if "gemini" in m.get("name", "").lower() and "generateContent" in m.get("supportedGenerationMethods", [])]
+                        if m_list:
+                            st.success(f"✅ รุ่นที่คุณมีสิทธิ์ใช้:\n\n" + "\n".join([f"- {x}" for x in m_list]))
+                        else:
+                            st.warning("ไม่มีรุ่น Gemini ที่รองรับ")
+                    else:
+                        st.error(f"ตรวจสอบไม่ได้: {res.text[:100]}")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+    else: 
+        st.warning("🟡 ไม่มี API Key")
 
 st.markdown(f'<div class="main-header">🏛️ SKRU Academic Workload AI ({APP_VERSION})</div>', unsafe_allow_html=True)
 email_val = user_email.strip() or "guest@skru.ac.th"
