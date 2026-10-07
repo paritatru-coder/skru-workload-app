@@ -211,4 +211,181 @@ def call_gemini(api_key, models, parts):
             if not cands: raise GeminiError("AI ไม่ส่งข้อความกลับมา")
             return extract_json(cands[0]["content"]["parts"][0]["text"]), model
             
-        err
+        err_msg = resp.json().get("error", {}).get("message", resp.text[:100]) if "error" in resp.text else resp.text[:100]
+        if resp.status_code in (401, 403) or "API_KEY" in err_msg: raise GeminiError(f"API Key ผิด/ไม่มีสิทธิ์: {err_msg}")
+        if resp.status_code == 404:
+            last_err = f"ไม่พบรุ่น {model} บน {api_version}"
+            continue # ลองรุ่นสำรอง
+        if resp.status_code == 400: raise GeminiError(f"คำขอไม่ถูกต้อง (ไฟล์อาจใหญ่ไป): {err_msg}")
+        last_err = f"Error {resp.status_code}: {err_msg}"
+        
+    raise GeminiError(f"ไม่สำเร็จทุกรุ่น: {last_err}")
+
+def inline_part(data_bytes, mime):
+    return {"inlineData": {"mimeType": mime, "data": base64.b64encode(data_bytes).decode("ascii")}}
+
+def analyze_with_gemini(api_key, models, file_bytes, mime, local_text, category_hint, typed_text=""):
+    prompt = build_prompt(category_hint, local_text)
+    if typed_text: return call_gemini(api_key, models, [{"text": prompt + f"\n\n{typed_text[:8000]}"}])
+    
+    if mime == "application/pdf":
+        if len(file_bytes) <= MAX_INLINE_BYTES:
+            try: return call_gemini(api_key, models, [{"text": prompt}, inline_part(file_bytes, "application/pdf")])
+            except: pass
+        try: images = render_pdf_pages_to_png(file_bytes)
+        except Exception as e: raise GeminiError(f"แปลง PDF ไม่ได้: {e}")
+        return call_gemini(api_key, models, [{"text": prompt}] + [inline_part(img, "image/png") for img in images])
+        
+    return call_gemini(api_key, models, [{"text": prompt}, inline_part(file_bytes, mime)])
+
+# ---------------------------------------------------------
+# 5. Core Logic
+# ---------------------------------------------------------
+AWARD_KEYWORDS = ["ดีเยี่ยม", "excellent", "รางวัล", "award"]
+INTL_KEYWORDS = ["นานาชาติ", "international", "intl"]
+FILE_EXT_RE = re.compile(r"\.(pdf|png|jpe?g|webp)\b", re.I)
+
+def clean_field(value, filename=""):
+    if not value: return ""
+    v = str(value).strip()
+    if v.lower() in {"none", "null", "n/a", "-", "ไม่ระบุ", "ไม่พบ", "ไม่มี"}: return ""
+    if FILE_EXT_RE.search(v): return ""
+    if filename and (v.lower() in filename.lower() or filename.lower() in v.lower()): return ""
+    return v
+
+def compose_formal_text(title, venue, date, ref, formula, hours):
+    head = " ".join(p.strip() for p in [title, venue, date] if p and p.strip())
+    if ref: head += f" ({ref.strip()})"
+    return f"{head} = {formula.strip()} = {hours:.1f} ชม." if formula else f"{head} = {hours:.1f} ชม."
+
+def finalize_result(raw, evidence_text, filename, category_hint):
+    cat = raw.get("category", "")
+    if cat not in CATEGORIES: cat = category_hint if category_hint in CATEGORIES else CATEGORIES[1]
+    title, venue, date_str, ref = clean_field(raw.get("title"), filename), clean_field(raw.get("venue"), filename), clean_field(raw.get("date"), filename), clean_field(raw.get("ref"), filename)
+    formula, level, notes = clean_field(raw.get("formula"), filename), str(raw.get("level", "")), clean_field(raw.get("notes"), filename)
+    try: hours = float(raw.get("hours", 0.0))
+    except: hours = 0.0
+
+    all_text = " ".join([evidence_text or "", str(raw.get("raw_text", "")), title, venue, ref, formula, level, notes])
+    rule_applied = False
+
+    if cat == CATEGORIES[1] and (("นานาชาติ" in level or any(k in all_text.lower() for k in INTL_KEYWORDS)) and (raw.get("has_award") or any(k in all_text.lower() for k in AWARD_KEYWORDS))):
+        hours, formula, rule_applied = 24.0, "(นับสิทธิ์เผยแพร่นานาชาติ ที่ได้รับรางวัล/ระดับดีเยี่ยม = 24 ภาระงาน)", True
+
+    return {"category": cat, "title": title, "venue": venue, "date": date_str, "ref": ref, "formula": formula, "hours": hours, "formal_text": compose_formal_text(title, venue, date_str, ref, formula, hours), "notes": notes, "rule_applied": rule_applied}
+
+def guess_mime(uploaded):
+    if uploaded.type and uploaded.type != "application/octet-stream": return uploaded.type
+    return mimetypes.guess_type(uploaded.name)[0] or "image/jpeg"
+
+# ---------------------------------------------------------
+# 6. UI Structure
+# ---------------------------------------------------------
+with st.sidebar:
+    st.title("👤 ตั้งค่า")
+    user_email = st.text_input("📧 อีเมลบุคลากร:", value=st.session_state.get("user_email", ""))
+    if user_email: st.session_state["user_email"] = user_email.strip()
+    st.divider()
+    
+    api_key_env = str(st.secrets["GEMINI_API_KEY"]).strip() if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets else ""
+    user_api_key = st.text_input("🔑 Gemini API Key:", type="password", value="", placeholder="ใช้ค่าจาก Secrets อยู่" if api_key_env else "")
+    active_api_key = user_api_key.strip() or api_key_env
+    if active_api_key: st.success("🟢 พบ API Key")
+    else: st.warning("🟡 ไม่มี API Key")
+
+st.markdown(f'<div class="main-header">🏛️ SKRU Academic Workload AI ({APP_VERSION})</div>', unsafe_allow_html=True)
+email_val = user_email.strip() or "guest@skru.ac.th"
+
+if st.session_state.get("show_success"):
+    st.markdown('<div class="success-alert">🎉 บันทึกข้อมูลสำเร็จ!</div>', unsafe_allow_html=True)
+    st.session_state["show_success"] = False
+
+tab1, tab2, tab3 = st.tabs(["📥 1. สกัดข้อมูล (AI)", "📊 2. คลังข้อมูล", "📄 3. รายงาน Word"])
+all_data_df = load_all_data()
+
+with tab1:
+    col_a, col_b = st.columns([1, 1], gap="large")
+    with col_a:
+        st.subheader("1. อัปโหลดเอกสาร")
+        cat_in = st.selectbox("📂 หมวดงานเบื้องต้น:", [AUTO_CATEGORY] + CATEGORIES)
+        method = st.radio("วิธีป้อนข้อมูล:", ["📤 ไฟล์ (PDF, PNG)", "✍️ พิมพ์เอง"])
+        file_up, text_in = None, ""
+        if "ไฟล์" in method: file_up = st.file_uploader("แนบเอกสาร:", type=["pdf", "png", "jpg", "jpeg"])
+        else: text_in = st.text_area("พิมพ์รายละเอียด:")
+
+        if st.button("🤖 ให้ AI อ่านเอกสาร", type="primary", use_container_width=True):
+            if not file_up and not text_in.strip(): st.warning("⚠️ โปรดแนบไฟล์หรือข้อความ")
+            else:
+                with st.spinner("กำลังประมวลผล..."):
+                    result, notice = None, None
+                    try:
+                        f_bytes, f_name, mime, l_text, t_text = b"", "", "", "", ""
+                        if file_up:
+                            f_bytes, f_name, mime = file_up.getvalue(), file_up.name, guess_mime(file_up)
+                            if mime == "application/pdf": l_text = extract_text_from_pdf_bytes(f_bytes)
+                        else:
+                            t_text = l_text = text_in.strip()
+
+                        if active_api_key:
+                            raw_json, u_model = analyze_with_gemini(active_api_key, FALLBACK_MODELS, f_bytes, mime, l_text, cat_in, t_text)
+                            result = finalize_result(raw_json, l_text, f_name, cat_in)
+                            notice = ("success", f"✅ อ่านสำเร็จด้วย {u_model}" + (" | 🎯 ปรับคะแนนเป็น 24.0" if result["rule_applied"] else ""))
+                        else: notice = ("warning", "⚠️ ไม่มี API Key ใช้โหมดกรอกเอง")
+                    except Exception as e:
+                        notice = ("warning", f"⚠️ Error: {e} - กรุณากรอกเองด้านขวา")
+
+                    st.session_state.update({
+                        "notice": notice, "e_cat": result["category"] if result else CATEGORIES[1], "e_title": result["title"] if result else "",
+                        "e_venue": result["venue"] if result else "", "e_date": result["date"] if result else "", "e_ref": result["ref"] if result else "",
+                        "e_formula": result["formula"] if result else "", "e_hours": float(result["hours"]) if result else 0.0
+                    })
+
+    with col_b:
+        st.subheader("2. ตรวจสอบ & บันทึก")
+        if "notice" in st.session_state:
+            if st.session_state["notice"][0] == "success": st.success(st.session_state["notice"][1])
+            else: st.warning(st.session_state["notice"][1])
+
+        e_cat = st.selectbox("📂 หมวดงาน:", CATEGORIES, index=CATEGORIES.index(st.session_state.get("e_cat", CATEGORIES[1])) if st.session_state.get("e_cat") in CATEGORIES else 1)
+        c1, c2 = st.columns(2)
+        with c1:
+            e_title = st.text_input("1. ชื่อบทบาท:", value=st.session_state.get("e_title", ""))
+            e_date = st.text_input("3. วันที่:", value=st.session_state.get("e_date", ""))
+            e_form = st.text_input("5. สูตรคำนวณ:", value=st.session_state.get("e_formula", ""))
+        with c2:
+            e_venue = st.text_input("2. สถานที่:", value=st.session_state.get("e_venue", ""))
+            e_ref = st.text_input("4. เลขที่อ้างอิง:", value=st.session_state.get("e_ref", ""))
+            e_hrs = st.number_input("6. ชั่วโมงสุทธิ:", value=st.session_state.get("e_hours", 0.0), step=0.5)
+
+        live_txt = compose_formal_text(e_title, e_venue, e_date, e_ref, e_form, e_hrs)
+        f_txt = st.text_area("📝 ข้อความทางการ:", value=live_txt, height=120)
+
+        if st.button("💾 บันทึกลงคลัง", type="primary", use_container_width=True):
+            if not f_txt.strip(): st.warning("⚠️ ไม่มีข้อความ")
+            else:
+                new_row = pd.DataFrame([{"email": email_val, "หมวดงาน": e_cat, "รายการภาระงาน": f_txt, "เลขคำสั่ง_อ้างอิง": e_ref, "วันที่": e_date, "ภาระงาน_ชม": e_hrs, "วันที่บันทึก": datetime.now().strftime("%Y-%m-%d %H:%M")}])
+                if save_all_data(pd.concat([all_data_df, new_row], ignore_index=True))[0]:
+                    st.session_state["show_success"] = True
+                    st.rerun()
+
+with tab2:
+    st.subheader(f"📊 คลังภาระงาน: {email_val}")
+    u_df = all_data_df[all_data_df["email"] == email_val].copy()
+    if u_df.empty: st.info("ยังไม่มีข้อมูล")
+    else:
+        edited = st.data_editor(u_df[["หมวดงาน", "รายการภาระงาน", "เลขคำสั่ง_อ้างอิง", "วันที่", "ภาระงาน_ชม"]].reset_index(drop=True), use_container_width=True, num_rows="dynamic")
+        st.metric("รวมชั่วโมง", f"{pd.to_numeric(edited['ภาระงาน_ชม'], errors='coerce').sum():.1f}")
+        c1, c2 = st.columns(2)
+        if c1.button("🔄 อัปเดต", type="primary"):
+            edited["email"], edited["วันที่บันทึก"] = email_val, datetime.now().strftime("%Y-%m-%d %H:%M")
+            save_all_data(pd.concat([all_data_df[all_data_df["email"] != email_val], edited[edited["รายการภาระงาน"].str.strip() != ""]]))
+            st.rerun()
+        if c2.button("🗑️ ลบทั้งหมด") and st.checkbox("ยืนยัน"):
+            save_all_data(all_data_df[all_data_df["email"] != email_val])
+            st.rerun()
+
+with tab3:
+    st.subheader(f"📋 สรุปคะแนน: {email_val}")
+    t_hrs = pd.to_numeric(all_data_df[all_data_df["email"] == email_val]["ภาระงาน_ชม"], errors="coerce").sum()
+    c1, c2 = min(t_hrs / 35.0, 1.0) * 70.0, st.number_input("คะแนนองค์ประกอบ 2:", value=30.0)
+    st.metric("คะแนนรวม", f"{c1 + c2:.2f} / 100")
