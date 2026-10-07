@@ -18,7 +18,7 @@ try:
 except ImportError:
     fitz = None
 
-APP_VERSION = "v18 (Next-Gen 2026 Models)"
+APP_VERSION = "v19 (Smart Formula & Word Export)"
 
 CATEGORIES = [
     "1. ภาระงานสอน",
@@ -128,7 +128,7 @@ def extract_text_from_pdf_bytes(file_bytes):
     return text.strip()
 
 def render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=0.8):
-    if not fitz: raise RuntimeError("ไม่พบไลบรารี PyMuPDF (ทำให้ไม่สามารถแปลง PDF สแกนเป็นภาพได้)")
+    if not fitz: raise RuntimeError("ไม่พบไลบรารี PyMuPDF")
     images = []
     with fitz.open(stream=file_bytes, filetype="pdf") as doc:
         for i, page in enumerate(doc):
@@ -139,21 +139,24 @@ def render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=0.8):
     return images
 
 # ---------------------------------------------------------
-# 4. Gemini API (Multi-Endpoint Routing)
+# 4. Gemini API
 # ---------------------------------------------------------
 class GeminiError(Exception): pass
 
 RUBRIC_TEXT = """
-เกณฑ์ภาระงาน มรภ.สงขลา (สรุป):
-- งานวิชาการ: Proceedings ชาติ 10; นานาชาติ/วารสาร 12; TCI2=15; TCI1=19; บทความ ก.พ.อ.=21; บทความรางวัล=14/20; วิจัยบูรณาการ=4
-- ทุนวิจัย(ชม./สัปดาห์): คณะ 6, มหาลัย 8, นอก 10
-- ตำรา/หนังสือ ไม่เกิน 12; คำสอน ไม่เกิน 9; ประกอบการสอน/สื่อ ไม่เกิน 6
-- สร้างสรรค์: ชาติไม่รางวัล 5; ชาติรางวัล 10; ร่วมมือตปท 12; อาเซียนไม่รางวัล 15; อาเซียนรางวัล 18; นานาชาติไม่รางวัล 21; นานาชาติรางวัล 24
-- บริการวิชาการ: รับผิดชอบหลัก 5; ประธานฝ่าย 2; กรรมการ 1; เลขา 1.5; วิทยากร 0.5 ชม./1 ชม.
-- ทำนุบำรุง(ผู้จัด): ประธาน 1 ชม./วัน; กรรมการ 0.5; เลขา 0.75; เข้าร่วม 0.5 ชม./โครงการ
-- ที่ปรึกษา: โครงงาน ป.ตรี ที่ปรึกษา 1 ชม./คน; ที่ปรึกษาร่วม 0.75; กรรมการสอบหัวข้อ 0.15/เค้าโครง 0.3/โครงการ 0.5
-- พัฒนาตนเอง: อบรมในประเทศ 1 ชม./วันทำการ, ตปท 1.5 ชม./วันทำการ
-- งานพัสดุ: ประธาน/กรรมการ/เลขา คิดตามวงเงินคำสั่ง
+เกณฑ์การคิดภาระงาน มรภ.สงขลา และการเขียนสูตร (formula) ให้ยึดรูปแบบตามนี้อย่างเคร่งครัด:
+1. บริการวิชาการ (วิทยากร): ได้ 0.5 ภาระงาน ต่อ 1 ชม.จริง (เต็มวัน=6ชม., ครึ่งวัน=3ชม.) 
+   -> สูตรตัวอย่าง: (6ชม.x2วันx0.5) หรือ (3ชม.x5วันx0.5)
+2. ทำนุบำรุงศิลปวัฒนธรรม (ผู้จัดงาน): ประธาน 1 ชม./วัน, กรรมการ 0.5 ชม./วัน, เลขา 0.75 ชม./วัน 
+   -> สูตรตัวอย่าง: (0.5x2วัน) หรือ (1x1วัน)
+3. ทำนุบำรุงศิลปวัฒนธรรม (ผู้เข้าร่วม): เหมาจ่าย 0.5 ชม./โครงการ (ไม่คูณจำนวนวัน) 
+   -> สูตรตัวอย่าง: (0.5x1โครงการ)
+4. คำสั่งเฉพาะกิจ/กรรมการอื่นๆ: นับเหมาเป็น "ต่อ 1 คำสั่ง" (ไม่คูณจำนวนวัน) ประธาน 1 ชม./คำสั่ง, กรรมการ 0.5 ชม./คำสั่ง, เลขา 0.75 ชม./คำสั่ง 
+   -> สูตรตัวอย่าง: (0.5x1คำสั่ง) หรือ (1x1คำสั่ง)
+5. ที่ปรึกษา/สอบ ป.ตรี: ที่ปรึกษา 1 ชม./คน, กรรมการสอบโครงการ 0.5 ชม./เรื่อง 
+   -> สูตรตัวอย่าง: (1x5คน) หรือ (0.5x2เรื่อง)
+6. งานสร้างสรรค์/วิชาการ/วิจัย: ระบุคะแนนเหมาจ่ายตามเกณฑ์
+   -> สูตรตัวอย่าง: (นับสิทธิ์เผยแพร่ระดับชาติ = 10 ภาระงาน) หรือ (นับสิทธิ์เผยแพร่นานาชาติ ที่ได้รับรางวัล = 24 ภาระงาน)
 """
 
 def build_prompt(category_hint, local_text):
@@ -163,12 +166,15 @@ def build_prompt(category_hint, local_text):
         + hint_line +
         "กติกาสำคัญ:\n"
         "1. ห้ามใช้ชื่อไฟล์ (.pdf/.png/.jpg) เป็นข้อมูลใดๆ\n"
-        "2. title=ชื่อผลงาน/โครงการจริง, venue=เวที/สถานที่จัดจริง, date=วันที่จริง, ref=เลขที่หนังสือ/คำสั่งอ้างอิงจริง\n"
-        "3. ถ้าไม่พบข้อมูลให้ใส่สตริงว่าง \"\" ห้ามเดา\n"
-        "4. level=ระดับผลงาน (ชาติ/อาเซียน/นานาชาติ), has_award=true (ถ้าพบคำว่า ดีเยี่ยม/Excellent/รางวัล/Award)\n"
-        "5. hours=ภาระงาน(ตัวเลข), formula=สูตรการคำนวณ\n"
-        "6. category=หมวดงาน (1 ถึง 7)\n"
-        "7. raw_text=ข้อความสกัดสำคัญ, notes=ข้อสังเกต\n\n"
+        "2. title=ชื่อผลงาน/โครงการ/บทบาทจริง\n"
+        "3. venue=เวที/สถานที่จัดจริง\n"
+        "4. date=วันที่จริง\n"
+        "5. ref=เลขที่หนังสือ/คำสั่งอ้างอิงจริง\n"
+        "6. level=ระดับผลงาน (ชาติ/อาเซียน/นานาชาติ), has_award=true (ถ้าพบคำว่า ดีเยี่ยม/Excellent/รางวัล/Award)\n"
+        "7. hours=ภาระงานสุทธิ (ตัวเลข)\n"
+        "8. formula=เขียนเฉพาะตัวเลขสูตรในวงเล็บให้ชัดเจนตามเกณฑ์ด้านล่าง เช่น (3ชม.x5วันx0.5) หรือ (0.5x1คำสั่ง) ห้ามเขียนข้อความอธิบายยาวๆ\n"
+        "9. category=หมวดงาน (1 ถึง 7)\n"
+        "10. ถ้าไม่พบข้อมูลให้ใส่สตริงว่าง \"\"\n\n"
         + RUBRIC_TEXT +
         "\nตอบเป็น JSON ล้วนๆ ห้ามมี Markdown:\n"
         '{"category": "", "title": "", "venue": "", "date": "", "ref": "", "level": "", "has_award": false, "formula": "", "hours": 0.0, "raw_text": "", "notes": ""}'
@@ -195,20 +201,14 @@ def call_gemini(api_key, model_list, parts):
 
     for model in test_models:
         if not model: continue
-        
-        # ลองเคาะประตูทุกเวอร์ชันของ API
         endpoints = [
             f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={api_key}",
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
             f"https://generativelanguage.googleapis.com/v1alpha/models/{model}:generateContent?key={api_key}"
         ]
-        
         for url in endpoints:
-            try:
-                resp = requests.post(url, headers=headers, json=body, timeout=60)
-            except Exception as e:
-                last_err = f"เชื่อมต่อไม่ได้: {e}"
-                continue
+            try: resp = requests.post(url, headers=headers, json=body, timeout=60)
+            except Exception as e: last_err = f"เชื่อมต่อไม่ได้: {e}"; continue
 
             if resp.status_code == 200:
                 cands = resp.json().get("candidates", [])
@@ -216,30 +216,11 @@ def call_gemini(api_key, model_list, parts):
                 return extract_json(cands[0]["content"]["parts"][0]["text"]), model
                 
             err_msg = resp.json().get("error", {}).get("message", resp.text[:150]) if "error" in resp.text else resp.text[:150]
-            
-            if resp.status_code == 404:
-                last_err = f"404 Not Found (ไม่มีรุ่น {model} ใน Endpoint นี้)"
-                continue 
-                
-            if resp.status_code in (401, 403) or "API_KEY" in err_msg:
-                raise GeminiError(f"API Key ผิด/ไม่มีสิทธิ์: {err_msg}")
-                
-            if resp.status_code == 400:
-                raise GeminiError(f"400 Bad Request (ไฟล์ภาพอาจใหญ่ไป หรือรูปแบบผิด): {err_msg}")
-                
+            if resp.status_code == 404: last_err = f"404 Not Found (ไม่มีรุ่น {model} ใน Endpoint นี้)"; continue 
+            if resp.status_code in (401, 403) or "API_KEY" in err_msg: raise GeminiError(f"API Key ผิด/ไม่มีสิทธิ์: {err_msg}")
+            if resp.status_code == 400: raise GeminiError(f"400 Bad Request (ไฟล์ภาพอาจใหญ่ไป หรือรูปแบบผิด): {err_msg}")
             last_err = f"Error {resp.status_code}: {err_msg}"
             
-    # ถ้ารันจนครบทุกรุ่นแล้วพังเรียบ ให้เช็ครุ่นที่มีสิทธิ์ใช้งาน
-    try:
-        check_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-        check_resp = requests.get(check_url, timeout=10)
-        if check_resp.status_code == 200:
-            valid_models = [m["name"].replace("models/", "") for m in check_resp.json().get("models", []) if "gemini" in m.get("name", "").lower() and "generateContent" in m.get("supportedGenerationMethods", [])]
-            if valid_models:
-                raise GeminiError(f"ไม่พบรุ่นที่คุณระบุใน API! รุ่นที่คุณมีสิทธิ์ใช้ได้จริงคือ: {', '.join(valid_models)}")
-    except Exception as e:
-        if isinstance(e, GeminiError): raise e
-
     raise GeminiError(f"ทดสอบครบทุกรุ่นและทุก Endpoint แล้วไม่สำเร็จ: {last_err}")
 
 def inline_part(data_bytes, mime):
@@ -248,16 +229,11 @@ def inline_part(data_bytes, mime):
 def analyze_with_gemini(api_key, model_list, file_bytes, mime, local_text, category_hint, typed_text=""):
     prompt = build_prompt(category_hint, local_text)
     if typed_text: return call_gemini(api_key, model_list, [{"text": prompt + f"\n\n{typed_text[:8000]}"}])
-    
     if mime == "application/pdf":
-        try: 
-            images = render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=0.8)
-        except Exception as e: 
-            raise GeminiError(f"แปลง PDF เป็นภาพไม่สำเร็จ: {e}")
-            
+        try: images = render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=0.8)
+        except Exception as e: raise GeminiError(f"แปลง PDF เป็นภาพไม่สำเร็จ: {e}")
         parts = [{"text": prompt}] + [inline_part(img, "image/png") for img in images]
         return call_gemini(api_key, model_list, parts)
-        
     return call_gemini(api_key, model_list, [{"text": prompt}, inline_part(file_bytes, mime)])
 
 # ---------------------------------------------------------
@@ -276,9 +252,17 @@ def clean_field(value, filename=""):
     return v
 
 def compose_formal_text(title, venue, date, ref, formula, hours):
-    head = " ".join(p.strip() for p in [title, venue, date] if p and p.strip())
+    parts = []
+    if title: parts.append(title)
+    if venue: parts.append(venue)
+    if date: parts.append(date)
+    head = " ".join(parts)
     if ref: head += f" ({ref.strip()})"
-    return f"{head} = {formula.strip()} = {hours:.1f} ชม." if formula else f"{head} = {hours:.1f} ชม."
+    
+    if formula:
+        if not formula.startswith("("): formula = f"({formula})"
+        return f"{head} = {formula} = {hours:.1f} ชม."
+    return f"{head} = {hours:.1f} ชม."
 
 def finalize_result(raw, evidence_text, filename, category_hint):
     cat = raw.get("category", "")
@@ -313,11 +297,10 @@ with st.sidebar:
     user_api_key = st.text_input("🔑 Gemini API Key:", type="password", value="", placeholder="ใช้ค่าจาก Secrets อยู่" if api_key_env else "")
     active_api_key = user_api_key.strip() or api_key_env
     
-    # เปลี่ยน Key กล่องข้อความเพื่อล้างแคชเก่าทิ้ง แล้วตั้งค่าตามรุ่นที่มีสิทธิ์ใช้งานปัจจุบัน
     models_input = st.text_area(
         "🧠 รุ่น Gemini (เรียงลำดับสำรอง):", 
         value="gemini-2.5-flash, gemini-3.5-flash, gemini-flash-latest",
-        key="gemini_models_input_v18",
+        key="gemini_models_input_v19",
         help="คั่นด้วยลูกน้ำ (,) ระบบจะลองไปเรื่อยๆ"
     )
     user_models = [m.strip() for m in models_input.split(",") if m.strip()]
@@ -331,14 +314,10 @@ with st.sidebar:
                     res = requests.get(url, timeout=10)
                     if res.status_code == 200:
                         m_list = [m["name"].replace("models/", "") for m in res.json().get("models", []) if "gemini" in m.get("name", "").lower() and "generateContent" in m.get("supportedGenerationMethods", [])]
-                        if m_list:
-                            st.success(f"✅ รุ่นที่คุณมีสิทธิ์ใช้:\n\n" + "\n".join([f"- {x}" for x in m_list]))
-                        else:
-                            st.warning("ไม่มีรุ่น Gemini ที่รองรับ")
-                    else:
-                        st.error(f"ตรวจสอบไม่ได้: {res.text[:100]}")
-                except Exception as e:
-                    st.error(f"Error: {e}")
+                        if m_list: st.success(f"✅ รุ่นที่คุณมีสิทธิ์ใช้:\n\n" + "\n".join([f"- {x}" for x in m_list]))
+                        else: st.warning("ไม่มีรุ่น Gemini ที่รองรับ")
+                    else: st.error(f"ตรวจสอบไม่ได้: {res.text[:100]}")
+                except Exception as e: st.error(f"Error: {e}")
     else: 
         st.warning("🟡 ไม่มี API Key")
 
@@ -385,20 +364,13 @@ with tab1:
 
                     if result:
                         st.session_state.update({
-                            "notice": notice,
-                            "e_cat": result["category"],
-                            "e_title": result["title"],
-                            "e_venue": result["venue"],
-                            "e_date": result["date"],
-                            "e_ref": result["ref"],
-                            "e_formula": result["formula"],
-                            "e_hours": float(result["hours"])
+                            "notice": notice, "e_cat": result["category"], "e_title": result["title"],
+                            "e_venue": result["venue"], "e_date": result["date"], "e_ref": result["ref"],
+                            "e_formula": result["formula"], "e_hours": float(result["hours"])
                         })
                     else:
                         st.session_state.update({
-                            "notice": notice,
-                            "e_cat": CATEGORIES[1],
-                            "e_title": "", "e_venue": "", "e_date": "", 
+                            "notice": notice, "e_cat": CATEGORIES[1], "e_title": "", "e_venue": "", "e_date": "", 
                             "e_ref": "", "e_formula": "", "e_hours": 0.0
                         })
 
@@ -448,6 +420,53 @@ with tab2:
 
 with tab3:
     st.subheader(f"📋 สรุปคะแนน: {email_val}")
-    t_hrs = pd.to_numeric(all_data_df[all_data_df["email"] == email_val]["ภาระงาน_ชม"], errors="coerce").sum()
-    c1, c2 = min(t_hrs / 35.0, 1.0) * 70.0, st.number_input("คะแนนองค์ประกอบ 2:", value=30.0)
-    st.metric("คะแนนรวม", f"{c1 + c2:.2f} / 100")
+    u_df = all_data_df[all_data_df["email"] == email_val]
+    t_hrs = pd.to_numeric(u_df["ภาระงาน_ชม"], errors="coerce").sum()
+    c1 = min(t_hrs / 35.0, 1.0) * 70.0
+    c2 = st.number_input("คะแนนองค์ประกอบ 2:", value=30.0)
+    total_score = c1 + c2
+    st.metric("คะแนนรวม", f"{total_score:.2f} / 100")
+
+    try:
+        from docx import Document
+        from docx.shared import Pt
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        def generate_docx():
+            doc = Document()
+            title_p = doc.add_paragraph()
+            title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run_title = title_p.add_run("แบบสรุปการประเมินผลการปฏิบัติราชการของบุคลากรสายวิชาการ (ป-มร.สข. 01)")
+            run_title.bold = True
+            run_title.font.size = Pt(16)
+
+            doc.add_paragraph(f"ผู้รับการประเมิน: {email_val}")
+            doc.add_paragraph(f"คะแนนรวมสุทธิ: {total_score:.2f} / 100 คะแนน")
+
+            doc.add_heading("รายละเอียดภาระงานสะสม", level=2)
+            table = doc.add_table(rows=1, cols=4)
+            table.style = "Table Grid"
+            hdr_cells = table.rows[0].cells
+            hdr_cells[0].text, hdr_cells[1].text, hdr_cells[2].text, hdr_cells[3].text = "หมวดงาน", "รายการ", "อ้างอิง", "ชม."
+
+            for _, r in u_df.iterrows():
+                row_cells = table.add_row().cells
+                row_cells[0].text = str(r["หมวดงาน"])
+                row_cells[1].text = str(r["รายการภาระงาน"])
+                row_cells[2].text = str(r["เลขคำสั่ง_อ้างอิง"])
+                row_cells[3].text = str(r["ภาระงาน_ชม"])
+
+            buf = io.BytesIO()
+            doc.save(buf)
+            buf.seek(0)
+            return buf
+
+        st.download_button(
+            label="📥 ดาวน์โหลดแบบสรุป ป-มร.สข. 01 (.docx)",
+            data=generate_docx(),
+            file_name=f"ป-มร.สข.01_{email_val.split('@')[0]}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            type="primary"
+        )
+    except ImportError:
+        st.warning("⚠️ ไม่สามารถสร้างไฟล์ Word ได้ กรุณาติดตั้งไลบรารี python-docx (เพิ่มลงใน requirements.txt)")
