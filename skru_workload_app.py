@@ -344,4 +344,55 @@ with tab1:
                     st.session_state.update({
                         "notice": notice, "e_cat": result["category"] if result else CATEGORIES[1], "e_title": result["title"] if result else "",
                         "e_venue": result["venue"] if result else "", "e_date": result["date"] if result else "", "e_ref": result["ref"] if result else "",
-                        "e_formula": result["formula"] if result else "", "e_hours": float(
+                        "e_formula": result["formula"] if result else "", "e_hours": float(result["hours"]) if result else 0.0
+                    })
+
+    with col_b:
+        st.subheader("2. ตรวจสอบ & บันทึก")
+        if "notice" in st.session_state:
+            if st.session_state["notice"][0] == "success": st.success(st.session_state["notice"][1])
+            else: st.warning(st.session_state["notice"][1])
+
+        e_cat = st.selectbox("📂 หมวดงาน:", CATEGORIES, index=CATEGORIES.index(st.session_state.get("e_cat", CATEGORIES[1])) if st.session_state.get("e_cat") in CATEGORIES else 1)
+        c1, c2 = st.columns(2)
+        with c1:
+            e_title = st.text_input("1. ชื่อบทบาท:", value=st.session_state.get("e_title", ""))
+            e_date = st.text_input("3. วันที่:", value=st.session_state.get("e_date", ""))
+            e_form = st.text_input("5. สูตรคำนวณ:", value=st.session_state.get("e_formula", ""))
+        with c2:
+            e_venue = st.text_input("2. สถานที่:", value=st.session_state.get("e_venue", ""))
+            e_ref = st.text_input("4. เลขที่อ้างอิง:", value=st.session_state.get("e_ref", ""))
+            e_hrs = st.number_input("6. ชั่วโมงสุทธิ:", value=st.session_state.get("e_hours", 0.0), step=0.5)
+
+        live_txt = compose_formal_text(e_title, e_venue, e_date, e_ref, e_form, e_hrs)
+        f_txt = st.text_area("📝 ข้อความทางการ:", value=live_txt, height=120)
+
+        if st.button("💾 บันทึกลงคลัง", type="primary", use_container_width=True):
+            if not f_txt.strip(): st.warning("⚠️ ไม่มีข้อความ")
+            else:
+                new_row = pd.DataFrame([{"email": email_val, "หมวดงาน": e_cat, "รายการภาระงาน": f_txt, "เลขคำสั่ง_อ้างอิง": e_ref, "วันที่": e_date, "ภาระงาน_ชม": e_hrs, "วันที่บันทึก": datetime.now().strftime("%Y-%m-%d %H:%M")}])
+                if save_all_data(pd.concat([all_data_df, new_row], ignore_index=True))[0]:
+                    st.session_state["show_success"] = True
+                    st.rerun()
+
+with tab2:
+    st.subheader(f"📊 คลังภาระงาน: {email_val}")
+    u_df = all_data_df[all_data_df["email"] == email_val].copy()
+    if u_df.empty: st.info("ยังไม่มีข้อมูล")
+    else:
+        edited = st.data_editor(u_df[["หมวดงาน", "รายการภาระงาน", "เลขคำสั่ง_อ้างอิง", "วันที่", "ภาระงาน_ชม"]].reset_index(drop=True), use_container_width=True, num_rows="dynamic")
+        st.metric("รวมชั่วโมง", f"{pd.to_numeric(edited['ภาระงาน_ชม'], errors='coerce').sum():.1f}")
+        c1, c2 = st.columns(2)
+        if c1.button("🔄 อัปเดต", type="primary"):
+            edited["email"], edited["วันที่บันทึก"] = email_val, datetime.now().strftime("%Y-%m-%d %H:%M")
+            save_all_data(pd.concat([all_data_df[all_data_df["email"] != email_val], edited[edited["รายการภาระงาน"].str.strip() != ""]]))
+            st.rerun()
+        if c2.button("🗑️ ลบทั้งหมด") and st.checkbox("ยืนยัน"):
+            save_all_data(all_data_df[all_data_df["email"] != email_val])
+            st.rerun()
+
+with tab3:
+    st.subheader(f"📋 สรุปคะแนน: {email_val}")
+    t_hrs = pd.to_numeric(all_data_df[all_data_df["email"] == email_val]["ภาระงาน_ชม"], errors="coerce").sum()
+    c1, c2 = min(t_hrs / 35.0, 1.0) * 70.0, st.number_input("คะแนนองค์ประกอบ 2:", value=30.0)
+    st.metric("คะแนนรวม", f"{c1 + c2:.2f} / 100")
