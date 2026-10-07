@@ -9,7 +9,12 @@ from datetime import datetime
 import time
 import requests
 
-APP_VERSION = "v20 (Mobile & Speed Optimized)"
+try:
+    import pdfplumber
+except ImportError:
+    pdfplumber = None
+
+APP_VERSION = "v21 (Next-Gen Exclusive)"
 
 CATEGORIES = [
     "1. ภาระงานสอน",
@@ -90,7 +95,29 @@ def save_all_data(full_df):
     return True, "Local Session"
 
 # ---------------------------------------------------------
-# 3. Gemini API & Prompt Logic
+# 3. Text Extraction Fallback (ถ้า AI พัง)
+# ---------------------------------------------------------
+def extract_text_from_pdf_bytes(file_bytes):
+    text = ""
+    if pdfplumber:
+        try:
+            with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+                for page in pdf.pages:
+                    t = page.extract_text()
+                    if t: text += t + "\n"
+        except: pass
+    if not text.strip():
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+            for page in reader.pages:
+                t = page.extract_text()
+                if t: text += t + "\n"
+        except: pass
+    return text.strip()
+
+# ---------------------------------------------------------
+# 4. Gemini API Logic
 # ---------------------------------------------------------
 class GeminiError(Exception): pass
 
@@ -139,53 +166,47 @@ def extract_json(text):
     if m:
         try: return json.loads(m.group(0))
         except: pass
-    raise GeminiError("AI ไม่ได้ตอบเป็น JSON (อาจจะติดระบบความปลอดภัย)")
+    raise GeminiError("AI ไม่ได้ตอบเป็น JSON")
 
 def call_gemini(api_key, model_list, parts):
     body = {"contents": [{"parts": parts}], "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}}
     headers = {"Content-Type": "application/json"}
     last_err = ""
 
-    safe_models = model_list + ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-1.5-flash-latest"]
-    seen = set()
-    test_models = [x for x in safe_models if not (x in seen or seen.add(x))]
+    # ใช้เฉพาะโมเดลที่คุณกรอกมาในหน้าเว็บเท่านั้น ไม่มีฮาร์ดโค้ดขยะแอบแฝง
+    safe_models = [m.strip() for m in model_list if m.strip()]
+    if not safe_models: safe_models = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
 
-    for model in test_models:
-        if not model: continue
+    for model in safe_models:
         endpoints = [
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
-            f"https://generativelanguage.googleapis.com/v1alpha/models/{model}:generateContent?key={api_key}",
-            f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={api_key}"
+            f"https://generativelanguage.googleapis.com/v1alpha/models/{model}:generateContent?key={api_key}"
         ]
         
         for url in endpoints:
-            # เพิ่มระบบลองส่งใหม่ (Retry) 3 ครั้งอัตโนมัติหากเจอ 503
             for attempt in range(3):
-                try: 
-                    resp = requests.post(url, headers=headers, json=body, timeout=60)
-                except Exception as e: 
-                    last_err = f"เชื่อมต่อไม่ได้: {e}"; break
+                try: resp = requests.post(url, headers=headers, json=body, timeout=60)
+                except Exception as e: last_err = f"เชื่อมต่อไม่ได้: {e}"; break
 
                 if resp.status_code == 200:
                     cands = resp.json().get("candidates", [])
                     if not cands: raise GeminiError("AI ประมวลผลสำเร็จแต่ไม่ส่งข้อความกลับมา")
                     return extract_json(cands[0]["content"]["parts"][0]["text"]), model
                 
-                # หากเจอ 503 ให้รอ 2 วินาทีแล้วลองส่งใหม่ ไม่ต้องข้ามไปโมเดลอื่น
                 if resp.status_code == 503:
-                    last_err = "503 High Demand - กำลังรอคิวส่งใหม่..."
+                    last_err = f"503 High Demand (รุ่น {model}) - ลองส่งใหม่รอบที่ {attempt+1}..."
                     time.sleep(2)
                     continue
 
                 err_msg = resp.json().get("error", {}).get("message", resp.text[:150]) if "error" in resp.text else resp.text[:150]
                 if resp.status_code == 404: last_err = f"404 Not Found (ไม่มีรุ่น {model})"; break 
-                if resp.status_code in (401, 403) or "API_KEY" in err_msg: raise GeminiError(f"API Key ผิด/ไม่มีสิทธิ์: {err_msg}")
-                if resp.status_code == 400: raise GeminiError(f"400 Bad Request (ไฟล์อาจใหญ่เกินไป หรือรูปแบบผิด): {err_msg}")
+                if resp.status_code in (401, 403): raise GeminiError(f"API Key ผิด/ไม่มีสิทธิ์: {err_msg}")
+                if resp.status_code == 400: raise GeminiError(f"400 Bad Request (ไฟล์อาจมีปัญหา): {err_msg}")
                 
                 last_err = f"Error {resp.status_code}: {err_msg}"
-                break # Break attempt loop for non-503 errors
+                break
             
-    raise GeminiError(f"ทดสอบครบทุกรุ่นแล้วไม่สำเร็จ: {last_err}")
+    raise GeminiError(f"ทดสอบโมเดลของคุณไม่สำเร็จ: {last_err}")
 
 def inline_part(data_bytes, mime):
     return {"inlineData": {"mimeType": mime, "data": base64.b64encode(data_bytes).decode("ascii")}}
@@ -193,15 +214,10 @@ def inline_part(data_bytes, mime):
 def analyze_with_gemini(api_key, model_list, file_bytes, mime, local_text, category_hint, typed_text=""):
     prompt = build_prompt(category_hint, local_text)
     if typed_text: return call_gemini(api_key, model_list, [{"text": prompt + f"\n\n{typed_text[:8000]}"}])
-    
-    # เลิกใช้ PyMuPDF (fitz) ส่ง PDF สแกนเข้า Gemini ตรงๆ (Gemini มี OCR ในตัวที่รับ PDF ได้โดยตรง)
-    if mime == "application/pdf":
-        return call_gemini(api_key, model_list, [{"text": prompt}, inline_part(file_bytes, "application/pdf")])
-        
     return call_gemini(api_key, model_list, [{"text": prompt}, inline_part(file_bytes, mime)])
 
 # ---------------------------------------------------------
-# 4. Core Normalization Logic
+# 5. Core Normalization Logic
 # ---------------------------------------------------------
 AWARD_KEYWORDS = ["ดีเยี่ยม", "excellent", "รางวัล", "award"]
 INTL_KEYWORDS = ["นานาชาติ", "international", "intl"]
@@ -246,10 +262,10 @@ def finalize_result(raw, evidence_text, filename, category_hint):
 
 def guess_mime(uploaded):
     if uploaded.type and uploaded.type != "application/octet-stream": return uploaded.type
-    return mimetypes.guess_type(uploaded.name)[0] or "image/jpeg"
+    return mimetypes.guess_type(uploaded.name)[0] or "application/pdf"
 
 # ---------------------------------------------------------
-# 5. UI Structure
+# 6. UI Structure
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("👤 ตั้งค่า")
@@ -263,8 +279,8 @@ with st.sidebar:
     
     models_input = st.text_area(
         "🧠 รุ่น Gemini (เรียงลำดับสำรอง):", 
-        value="gemini-2.5-flash-lite, gemini-2.5-flash, gemini-3.5-flash",
-        key="gemini_models_input_v20",
+        value="gemini-2.5-flash-lite, gemini-2.5-flash",
+        key="gemini_models_input_v21",
         help="คั่นด้วยลูกน้ำ (,) ระบบจะลองไปเรื่อยๆ"
     )
     user_models = [m.strip() for m in models_input.split(",") if m.strip()]
@@ -301,7 +317,6 @@ with tab1:
         st.subheader("1. อัปโหลดเอกสาร")
         cat_in = st.selectbox("📂 หมวดงานเบื้องต้น:", [AUTO_CATEGORY] + CATEGORIES)
         
-        # เพิ่มปุ่มกล้องถ่ายรูปกลับมาให้แล้วครับ รองรับการเปิดบนมือถือได้เลย!
         method = st.radio("วิธีป้อนข้อมูล:", ["📤 ไฟล์ (PDF, PNG)", "📷 ถ่ายภาพกล้องมือถือ", "✍️ พิมพ์เอง"])
         file_up, text_in = None, ""
         if "ไฟล์" in method: file_up = st.file_uploader("แนบเอกสาร:", type=["pdf", "png", "jpg", "jpeg"])
@@ -317,6 +332,7 @@ with tab1:
                         f_bytes, f_name, mime, l_text, t_text = b"", "", "", "", ""
                         if file_up:
                             f_bytes, f_name, mime = file_up.getvalue(), getattr(file_up, "name", "camera_image.jpg"), guess_mime(file_up)
+                            if mime == "application/pdf": l_text = extract_text_from_pdf_bytes(f_bytes)
                         else:
                             t_text = l_text = text_in.strip()
 
