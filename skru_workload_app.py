@@ -19,7 +19,7 @@ try:
 except ImportError:
     fitz = None
 
-APP_VERSION = "v14.4 (Ultimate Fix)"
+APP_VERSION = "v14.5 (Final API Route Fix)"
 
 CATEGORIES = [
     "1. ภาระงานสอน",
@@ -33,8 +33,9 @@ CATEGORIES = [
 AUTO_CATEGORY = "ให้ AI ประเมินหมวดงานอัตโนมัติ"
 DB_COLUMNS = ["email", "หมวดงาน", "รายการภาระงาน", "เลขคำสั่ง_อ้างอิง", "วันที่", "ภาระงาน_ชม", "วันที่บันทึก"]
 
-DEFAULT_MODEL = "gemini-2.0-flash"
-FALLBACK_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+# ใช้ 1.5-flash เป็นตัวหลักเพราะเสถียรที่สุดบน REST API ตอนนี้
+DEFAULT_MODEL = "gemini-1.5-flash"
+FALLBACK_MODELS = ["gemini-1.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-pro"]
 MAX_INLINE_BYTES = 8 * 1024 * 1024  
 
 # ---------------------------------------------------------
@@ -132,7 +133,8 @@ def extract_text_from_pdf_bytes(file_bytes):
         except: pass
     return text.strip()
 
-def render_pdf_pages_to_png(file_bytes, max_pages=5, zoom=1.3):
+def render_pdf_pages_to_png(file_bytes, max_pages=3, zoom=1.0):
+    """ลดความละเอียดลงนิดหน่อยเพื่อการันตีว่าไฟล์จะไม่ใหญ่เกิน Google API Limit"""
     if not fitz: raise RuntimeError("ไม่พบไลบรารี PyMuPDF")
     images = []
     with fitz.open(stream=file_bytes, filetype="pdf") as doc:
@@ -193,13 +195,13 @@ def extract_json(text):
 
 def call_gemini(api_key, models, parts):
     body = {"contents": [{"parts": parts}], "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}}
-    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+    headers = {"Content-Type": "application/json"}
     last_err = ""
 
     for model in models:
-        # สลับ Endpoint ให้รองรับ 2.0 โดยอัตโนมัติ
         api_version = "v1alpha" if "2.0" in model else "v1beta"
-        url = f"https://generativelanguage.googleapis.com/{api_version}/models/{model}:generateContent"
+        # วิธีการเชื่อมต่อแบบใหม่: ยัด API Key ใส่ใน URL ป้องกัน Streamlit Cloud ลบ Header ทิ้ง
+        url = f"https://generativelanguage.googleapis.com/{api_version}/models/{model}:generateContent?key={api_key}"
         
         try:
             resp = requests.post(url, headers=headers, json=body, timeout=60)
@@ -212,11 +214,16 @@ def call_gemini(api_key, models, parts):
             return extract_json(cands[0]["content"]["parts"][0]["text"]), model
             
         err_msg = resp.json().get("error", {}).get("message", resp.text[:100]) if "error" in resp.text else resp.text[:100]
-        if resp.status_code in (401, 403) or "API_KEY" in err_msg: raise GeminiError(f"API Key ผิด/ไม่มีสิทธิ์: {err_msg}")
+        
+        if resp.status_code in (401, 403) or "API_KEY" in err_msg: 
+            raise GeminiError(f"API Key ผิด/ไม่มีสิทธิ์: {err_msg}")
         if resp.status_code == 404:
-            last_err = f"ไม่พบรุ่น {model} บน {api_version}"
-            continue # ลองรุ่นสำรอง
-        if resp.status_code == 400: raise GeminiError(f"คำขอไม่ถูกต้อง (ไฟล์อาจใหญ่ไป): {err_msg}")
+            last_err = f"404 Not Found (โมเดล {model} ไม่มีอยู่จริง หรือลืมเปิด API): {err_msg}"
+            continue 
+        if resp.status_code == 400:
+            last_err = f"400 Bad Request (ไฟล์ภาพอาจใหญ่ไป หรือรูปแบบผิด): {err_msg}"
+            continue 
+            
         last_err = f"Error {resp.status_code}: {err_msg}"
         
     raise GeminiError(f"ไม่สำเร็จทุกรุ่น: {last_err}")
@@ -337,55 +344,4 @@ with tab1:
                     st.session_state.update({
                         "notice": notice, "e_cat": result["category"] if result else CATEGORIES[1], "e_title": result["title"] if result else "",
                         "e_venue": result["venue"] if result else "", "e_date": result["date"] if result else "", "e_ref": result["ref"] if result else "",
-                        "e_formula": result["formula"] if result else "", "e_hours": float(result["hours"]) if result else 0.0
-                    })
-
-    with col_b:
-        st.subheader("2. ตรวจสอบ & บันทึก")
-        if "notice" in st.session_state:
-            if st.session_state["notice"][0] == "success": st.success(st.session_state["notice"][1])
-            else: st.warning(st.session_state["notice"][1])
-
-        e_cat = st.selectbox("📂 หมวดงาน:", CATEGORIES, index=CATEGORIES.index(st.session_state.get("e_cat", CATEGORIES[1])) if st.session_state.get("e_cat") in CATEGORIES else 1)
-        c1, c2 = st.columns(2)
-        with c1:
-            e_title = st.text_input("1. ชื่อบทบาท:", value=st.session_state.get("e_title", ""))
-            e_date = st.text_input("3. วันที่:", value=st.session_state.get("e_date", ""))
-            e_form = st.text_input("5. สูตรคำนวณ:", value=st.session_state.get("e_formula", ""))
-        with c2:
-            e_venue = st.text_input("2. สถานที่:", value=st.session_state.get("e_venue", ""))
-            e_ref = st.text_input("4. เลขที่อ้างอิง:", value=st.session_state.get("e_ref", ""))
-            e_hrs = st.number_input("6. ชั่วโมงสุทธิ:", value=st.session_state.get("e_hours", 0.0), step=0.5)
-
-        live_txt = compose_formal_text(e_title, e_venue, e_date, e_ref, e_form, e_hrs)
-        f_txt = st.text_area("📝 ข้อความทางการ:", value=live_txt, height=120)
-
-        if st.button("💾 บันทึกลงคลัง", type="primary", use_container_width=True):
-            if not f_txt.strip(): st.warning("⚠️ ไม่มีข้อความ")
-            else:
-                new_row = pd.DataFrame([{"email": email_val, "หมวดงาน": e_cat, "รายการภาระงาน": f_txt, "เลขคำสั่ง_อ้างอิง": e_ref, "วันที่": e_date, "ภาระงาน_ชม": e_hrs, "วันที่บันทึก": datetime.now().strftime("%Y-%m-%d %H:%M")}])
-                if save_all_data(pd.concat([all_data_df, new_row], ignore_index=True))[0]:
-                    st.session_state["show_success"] = True
-                    st.rerun()
-
-with tab2:
-    st.subheader(f"📊 คลังภาระงาน: {email_val}")
-    u_df = all_data_df[all_data_df["email"] == email_val].copy()
-    if u_df.empty: st.info("ยังไม่มีข้อมูล")
-    else:
-        edited = st.data_editor(u_df[["หมวดงาน", "รายการภาระงาน", "เลขคำสั่ง_อ้างอิง", "วันที่", "ภาระงาน_ชม"]].reset_index(drop=True), use_container_width=True, num_rows="dynamic")
-        st.metric("รวมชั่วโมง", f"{pd.to_numeric(edited['ภาระงาน_ชม'], errors='coerce').sum():.1f}")
-        c1, c2 = st.columns(2)
-        if c1.button("🔄 อัปเดต", type="primary"):
-            edited["email"], edited["วันที่บันทึก"] = email_val, datetime.now().strftime("%Y-%m-%d %H:%M")
-            save_all_data(pd.concat([all_data_df[all_data_df["email"] != email_val], edited[edited["รายการภาระงาน"].str.strip() != ""]]))
-            st.rerun()
-        if c2.button("🗑️ ลบทั้งหมด") and st.checkbox("ยืนยัน"):
-            save_all_data(all_data_df[all_data_df["email"] != email_val])
-            st.rerun()
-
-with tab3:
-    st.subheader(f"📋 สรุปคะแนน: {email_val}")
-    t_hrs = pd.to_numeric(all_data_df[all_data_df["email"] == email_val]["ภาระงาน_ชม"], errors="coerce").sum()
-    c1, c2 = min(t_hrs / 35.0, 1.0) * 70.0, st.number_input("คะแนนองค์ประกอบ 2:", value=30.0)
-    st.metric("คะแนนรวม", f"{c1 + c2:.2f} / 100")
+                        "e_formula": result["formula"] if result else "", "e_hours": float(
