@@ -234,25 +234,30 @@ def build_prompt(category_hint, local_text):
         "อ่านเอกสารที่แนบมา (อาจเป็นภาพสแกนภาษาไทย) อย่างละเอียดทุกหน้า แล้วสกัดข้อมูลจริงจากเนื้อหาในเอกสาร\n\n"
         + hint_line
         + "กติกาสำคัญ:\n"
-        "1. ห้ามใช้ชื่อไฟล์ (.pdf/.png/.jpg) เป็นข้อมูลใดๆ ทั้งสิ้น\n"
-        "2. title = ชื่อผลงาน/โครงการ/หลักสูตร/บทบาทที่ระบุไว้จริงในเอกสาร\n"
-        "3. venue = เวที/สถานที่/หน่วยงานผู้จัดที่ระบุไว้จริง\n"
-        "4. date = วันที่จริงในเอกสาร (รูปแบบไทย พ.ศ. เช่น 16 มิถุนายน 2569; ถ้าหลายวันให้คั่นด้วยจุลภาค)\n"
-        "5. ref = เลขที่หนังสือ/เลขที่คำสั่ง/เลขที่ประกาศอ้างอิงจริง (เช่น คำสั่งคณะ ... ที่ 046/2569)\n"
-        "6. ถ้าไม่พบข้อมูลช่องใดให้ใส่สตริงว่าง \"\" ห้ามเดา ห้ามแต่งขึ้นเอง\n"
-        "7. level = ระดับของผลงาน เลือกจาก: ระดับชาติ, อาเซียน, นานาชาติ, ความร่วมมือระหว่างประเทศ, ไม่เกี่ยวข้อง/ไม่ระบุ\n"
-        "8. has_award = true ถ้าพบคำว่า ดีเยี่ยม, Excellent, รางวัล, Award หรือผลการประเมินระดับสูงสุด\n"
-        "9. hours = จำนวนภาระงาน (ตัวเลข) คำนวณตามเกณฑ์ด้านล่าง; formula = สูตรคำนวณสั้นๆ ในวงเล็บ เช่น (3ชมx5วันx0.5)\n"
-        "10. category ต้องเป็นข้อความหนึ่งในรายการต่อไปนี้ทุกตัวอักษร:\n" + cat_list + "\n"
-        "11. raw_text = ข้อความสำคัญที่อ่านได้จากเอกสาร (ถอดความตามต้นฉบับ ไม่เกิน 2500 ตัวอักษร)\n"
-        "12. notes = ข้อสังเกตหรือสิ่งที่ผู้ใช้ควรตรวจสอบซ้ำ (ถ้ามี)\n\n"
+        "1. ห้ามใช้ชื่อไฟล์ (.pdf/.png/.jpg) เป็นข้อมูลใดๆ ทั้งสิ้น และห้ามใส่ชื่อ-นามสกุลผู้รับเอกสารลงในช่องใดๆ\n"
+        "2. ถ้าเอกสารมีหลายหน้าที่เป็นใบเดียวกันคนละภาษา (เช่น ไทย/อังกฤษ) ให้นับเป็น 1 รายการ ห้ามนับซ้ำ\n"
+        "3. doc_type เลือกหนึ่งค่า: certificate_training (ใบประกาศนียบัตร/เกียรติบัตรผ่านการอบรม เรียนออนไลน์ MOOC สัมมนา), "
+        "command (คำสั่ง/ประกาศแต่งตั้ง), creative_research (ผลงานวิจัย/บทความ/ประพันธ์/งานสร้างสรรค์/รางวัลของผลงาน), "
+        "service (บริการวิชาการ/วิทยากร), other\n"
+        "4. ถ้า doc_type = certificate_training ให้กรอก: course_name = ชื่อหลักสูตรเท่านั้น (ไม่รวมคำว่า 'รายวิชา' 'หลักสูตร' และไม่รวมชื่อผู้รับ), "
+        "issuer = หน่วยงาน/โครงการที่ออกใบประกาศ (เช่น Thai MOOC กระทรวง อว.), cert_code = รหัส/เลขที่ใบประกาศที่พิมพ์ในเอกสาร (เช่นรหัสใต้ QR code), "
+        "course_hours = จำนวนชั่วโมงของหลักสูตรที่ระบุในเอกสาร (ตัวเลข), date = วันที่ออกใบประกาศ, และตั้ง hours = 0 (ระบบคำนวณเอง)\n"
+        "5. title = ชื่อผลงาน/โครงการ/บทบาทที่ระบุไว้จริงในเอกสาร; venue = เวที/สถานที่/หน่วยงานผู้จัดจริง\n"
+        "6. date = วันที่จริงในเอกสาร (รูปแบบไทย พ.ศ. เช่น 16 มิถุนายน 2569; หลายวันให้คั่นด้วยจุลภาค); ref = เลขที่หนังสือ/คำสั่ง/ประกาศอ้างอิงจริง\n"
+        "7. ถ้าไม่พบข้อมูลช่องใดให้ใส่สตริงว่าง \"\" หรือ 0 ห้ามเดา ห้ามแต่งขึ้นเอง\n"
+        "8. level = ระดับของผลงาน เลือกจาก: ระดับชาติ, อาเซียน, นานาชาติ, ความร่วมมือระหว่างประเทศ, ไม่เกี่ยวข้อง/ไม่ระบุ\n"
+        "9. has_award = true เฉพาะเมื่อ 'ผลงาน' ได้รับรางวัล/ผลประเมินดีเยี่ยม/Excellent จริง (คำว่า 'Awarded by/to' ในใบประกาศอบรมไม่นับเป็นรางวัล)\n"
+        "10. สำหรับ doc_type อื่น: hours = จำนวนภาระงานตามเกณฑ์ด้านล่าง; formula = สูตรสั้นๆ ในวงเล็บ เช่น (3ชมx5วันx0.5)\n"
+        "11. category ต้องเป็นข้อความหนึ่งในรายการต่อไปนี้ทุกตัวอักษร:\n" + cat_list + "\n"
+        "12. raw_text = ข้อความสำคัญที่อ่านได้ (ไม่เกิน 1500 ตัวอักษร); notes = สิ่งที่ผู้ใช้ควรตรวจสอบซ้ำ (ถ้ามี)\n\n"
         + RUBRIC_TEXT
         + "\nตอบกลับเป็น JSON เท่านั้น ห้ามมีข้อความอื่นนอก JSON ตามโครงสร้าง:\n"
-        '{"category": "", "title": "", "venue": "", "date": "", "ref": "", "level": "", '
-        '"has_award": false, "formula": "", "hours": 0, "raw_text": "", "notes": ""}\n'
+        '{"doc_type": "", "category": "", "title": "", "venue": "", "date": "", "ref": "", "level": "", '
+        '"has_award": false, "course_name": "", "issuer": "", "cert_code": "", "course_hours": 0, '
+        '"formula": "", "hours": 0, "raw_text": "", "notes": ""}\n'
     )
     if local_text:
-        prompt += "\nข้อความที่ดึงจาก text layer ของไฟล์ (อาจไม่ครบหรือผิดเพี้ยน ให้ยึดภาพ/เอกสารเป็นหลัก):\n" + local_text[:6000] + "\n"
+        prompt += "\nข้อความที่ผู้ใช้พิมพ์/ดึงมา:\n" + local_text[:6000] + "\n"
     return prompt
 
 
@@ -306,6 +311,7 @@ def call_gemini(api_key, models, parts):
             "temperature": 0,
             "responseMimeType": "application/json",
             "maxOutputTokens": 8192,
+            "thinkingConfig": {"thinkingLevel": "low"},  # ลดเวลาคิด -> เร็วขึ้น (ถ้ารุ่นไม่รองรับ จะตัดออกแล้วลองใหม่อัตโนมัติ)
         },
     }
     headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
@@ -345,6 +351,9 @@ def call_gemini(api_key, models, parts):
             except Exception:
                 err_msg = resp.text[:200]
 
+            if code == 400 and "thinking" in err_msg.lower() and "thinkingConfig" in body["generationConfig"]:
+                del body["generationConfig"]["thinkingConfig"]
+                continue
             if code in (401, 403) or (code == 400 and ("API key" in err_msg or "API_KEY" in err_msg)):
                 raise GeminiAuthError("API Key ไม่ถูกต้องหรือไม่มีสิทธิ์ใช้งาน: " + err_msg)
             if code == 404:
@@ -377,7 +386,8 @@ def call_gemini(api_key, models, parts):
 
 def analyze_with_gemini(api_key, models, file_bytes, mime, local_text, category_hint, typed_text=""):
     """ส่งไฟล์ (PDF ตรง / รูปภาพ / ข้อความ) เข้า Gemini Vision"""
-    prompt = build_prompt(category_hint, local_text)
+    # ไม่ส่ง text layer ไปกับไฟล์: PDF/ภาพถูกส่งเข้า Gemini โดยตรงอยู่แล้ว และ text layer ภาษาไทยมักสระ/วรรณยุกต์หาย
+    prompt = build_prompt(category_hint, "")
 
     if typed_text:
         parts = [{"text": prompt + "\nข้อความที่ผู้ใช้พิมพ์เอง:\n" + typed_text[:8000]}]
@@ -407,7 +417,11 @@ def analyze_with_gemini(api_key, models, file_bytes, mime, local_text, category_
 # ---------------------------------------------------------
 # 5. Business Rules & Normalization
 # ---------------------------------------------------------
-AWARD_KEYWORDS = ["ดีเยี่ยม", "excellent", "รางวัล", "award"]
+AWARD_RE = re.compile(r"ดีเยี่ยม|รางวัล|\bexcellent\b|\baward(?:s)?\b", re.I)  # "Awarded by/to" ไม่ถูกนับ
+TRAINING_RE = re.compile(
+    r"certificate of completion|thai\s*mooc|ผ่านเกณฑ์หลักสูตร|ผ่านการอบรม|ได้เข้ารับการอบรม|completion and fulfil+ment", re.I
+)
+THAI_MARKS = set("่้๊๋ิีึืุูัํ็์ำ")
 INTL_KEYWORDS = ["นานาชาติ", "international", "intl"]
 BAD_VALUES = {"none", "null", "n/a", "-", "ไม่ระบุ", "ไม่พบ", "ไม่มี"}
 FILE_EXT_RE = re.compile(r"\.(pdf|png|jpe?g|webp)\b", re.I)
@@ -464,9 +478,20 @@ def compose_formal_text(title, venue, date, ref, formula, hours):
     return f"{head} = {hours:.1f} ชม."
 
 
-def finalize_result(raw, evidence_text, filename, category_hint):
-    """ปรับผลลัพธ์ให้เป็นมาตรฐาน + บังคับใช้กฎ 24 ภาระงาน"""
+def thai_text_looks_garbled(text):
+    """text layer ไทยที่สระ/วรรณยุกต์หาย (พบบ่อยใน PDF จากระบบออกใบประกาศ)"""
+    thai = [c for c in (text or "") if "\u0e01" <= c <= "\u0e5b"]
+    if len(thai) < 30:
+        return False
+    consonants = sum(1 for c in thai if "\u0e01" <= c <= "\u0e2e")
+    marks = sum(1 for c in thai if c in THAI_MARKS)
+    return consonants > 0 and (marks / consonants) < 0.24
+
+
+def finalize_result(raw, evidence_text, filename, category_hint, training_mode="cert"):
+    """ปรับผลลัพธ์ให้เป็นมาตรฐาน + บังคับใช้กฎ (ใบประกาศอบรม -> หมวด 5, งานนานาชาติรางวัล -> 24)"""
     category = normalize_category(raw.get("category", ""), category_hint)
+    hint_locked = bool(category_hint and category_hint != AUTO_CATEGORY and category_hint in CATEGORIES)
     title = clean_field(raw.get("title"), filename)
     venue = clean_field(raw.get("venue"), filename)
     date_str = clean_field(raw.get("date"), filename)
@@ -475,15 +500,42 @@ def finalize_result(raw, evidence_text, filename, category_hint):
     hours = to_float(raw.get("hours"), 0.0)
     level = str(raw.get("level", "") or "")
     notes = clean_field(raw.get("notes"), filename)
+    doc_type = str(raw.get("doc_type", "") or "").strip()
 
-    all_text = " ".join([evidence_text or "", str(raw.get("raw_text", "") or ""), title, venue, ref_code, formula, level, notes])
+    all_text = " ".join([evidence_text or "", str(raw.get("raw_text", "") or ""), title, venue, ref_code, formula, level, notes,
+                         str(raw.get("course_name", "") or ""), str(raw.get("issuer", "") or "")])
 
     is_intl = contains_any(all_text, INTL_KEYWORDS) or "นานาชาติ" in level
-    has_award = bool(raw.get("has_award")) or contains_any(all_text, AWARD_KEYWORDS)
+    has_award = bool(raw.get("has_award")) or bool(AWARD_RE.search(all_text))
 
-    # กฎเฉพาะ: งานสร้างสรรค์/วิจัยนานาชาติ ที่พบ ดีเยี่ยม/Excellent/รางวัล/Award = 24 ภาระงานเสมอ
+    is_training = (doc_type == "certificate_training") or (
+        doc_type in ("", "other") and bool(TRAINING_RE.search(all_text)) and not (is_intl and has_award)
+    )
+
     rule_applied = False
-    if category == CATEGORIES[1] and is_intl and has_award:
+    if is_training:
+        # ใบประกาศ/เกียรติบัตรอบรม -> หมวด 5 เสมอ (ยกเว้นผู้ใช้เลือกหมวดเอง)
+        if not hint_locked:
+            category = CATEGORIES[4]
+        course = clean_field(raw.get("course_name"), filename)
+        course = re.sub(r"^(หลักสูตร|รายวิชา)\s*", "", course).strip()
+        issuer = clean_field(raw.get("issuer"), filename)
+        code = clean_field(raw.get("cert_code"), filename)
+        course_hours = to_float(raw.get("course_hours"), 0.0)
+        if course:
+            title = "ผ่านการอบรมหลักสูตร '" + course + "'"
+        if issuer:
+            venue = issuer
+        if code:
+            ref_code = "ใบประกาศนียบัตร รหัส " + code
+        if training_mode == "rubric":
+            hours = 1.0
+            formula = "(อบรม 1 วันทำการ x 1 ชม. ตามเกณฑ์งานพัฒนาตนเอง = 1 ภาระงาน)"
+        elif course_hours > 0:
+            hours = course_hours
+            formula = f"(อบรมหลักสูตร {course_hours:g} ชั่วโมง = {course_hours:g} ภาระงาน)"
+    elif category == CATEGORIES[1] and is_intl and has_award:
+        # กฎเฉพาะ: งานสร้างสรรค์/วิจัยนานาชาติ ที่พบ ดีเยี่ยม/Excellent/รางวัล/Award = 24 ภาระงานเสมอ
         hours = 24.0
         formula = "(นับสิทธิ์เผยแพร่นานาชาติ ที่ได้รับรางวัล/ระดับดีเยี่ยม = 24 ภาระงาน)"
         rule_applied = True
@@ -499,6 +551,7 @@ def finalize_result(raw, evidence_text, filename, category_hint):
         "formal_text": compose_formal_text(title, venue, date_str, ref_code, formula, hours),
         "notes": notes,
         "rule_applied": rule_applied,
+        "is_training": is_training,
     }
 
 
@@ -534,7 +587,7 @@ def guess_category_local(text):
     return CATEGORIES[4]
 
 
-def parse_text_local(text, filename, category_hint):
+def parse_text_local(text, filename, category_hint, training_mode="cert"):
     t = text or ""
     raw = {"category": guess_category_local(t), "title": "", "venue": "", "date": "", "ref": "",
            "formula": "", "hours": 0.0, "level": "", "has_award": False, "raw_text": t[:2500], "notes": ""}
@@ -553,13 +606,13 @@ def parse_text_local(text, filename, category_hint):
         if m:
             raw["ref"] = re.sub(r"\s+", " ", m.group(0)).strip()
             break
-    return finalize_result(raw, t, filename, category_hint)
+    return finalize_result(raw, t, filename, category_hint, training_mode)
 
 
 def blank_result(category_hint):
     cat = normalize_category("", category_hint)
     return {"category": cat, "title": "", "venue": "", "date": "", "ref": "", "formula": "",
-            "hours": 0.0, "formal_text": "", "notes": "", "rule_applied": False}
+            "hours": 0.0, "formal_text": "", "notes": "", "rule_applied": False, "is_training": False}
 
 
 def guess_mime(uploaded):
@@ -568,6 +621,46 @@ def guess_mime(uploaded):
         return mime
     guess, _ = mimetypes.guess_type(getattr(uploaded, "name", "") or "")
     return guess or "image/jpeg"
+
+
+def sniff_mime(data):
+    if data[:4] == b"%PDF":
+        return "application/pdf"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return ""
+
+
+def fetch_drive_file(url):
+    """ดาวน์โหลดไฟล์จากลิงก์ Google Drive ที่แชร์แบบ 'ทุกคนที่มีลิงก์' (ใช้แทนการอัปโหลดจากมือถือที่ไม่ผ่าน)"""
+    m = re.search(r"/d/([A-Za-z0-9_-]{10,})", url) or re.search(r"[?&]id=([A-Za-z0-9_-]{10,})", url)
+    if not m:
+        raise ValueError("ลิงก์ Google Drive ไม่ถูกต้อง (ควรเป็นรูปแบบ drive.google.com/file/d/.../view)")
+    try:
+        resp = requests.get(
+            "https://drive.usercontent.google.com/download",
+            params={"id": m.group(1), "export": "download", "confirm": "t"},
+            timeout=60,
+        )
+    except requests.RequestException as e:
+        raise ValueError("ดาวน์โหลดจาก Google Drive ไม่ได้: " + str(e))
+    data = resp.content
+    if len(data) > 25 * 1024 * 1024:
+        raise ValueError("ไฟล์ใหญ่เกิน 25 MB")
+    mime = sniff_mime(data)
+    if resp.status_code != 200 or not mime:
+        raise ValueError("เปิดไฟล์จากลิงก์ไม่ได้ — ตรวจว่าตั้งการแชร์เป็น 'ทุกคนที่มีลิงก์' (Anyone with the link) และไฟล์เป็น PDF/PNG/JPG")
+    return data, mime
+
+
+@st.cache_data(show_spinner=False, ttl=3600, max_entries=30)
+def cached_analyze(file_bytes, mime, category_hint, typed_text, models_tuple, _api_key):
+    """แคชผลต่อไฟล์เดียวกัน -> กดซ้ำไม่เสียเวลา/โควตา และได้ผลเหมือนเดิมทุกครั้ง"""
+    return analyze_with_gemini(_api_key, list(models_tuple), file_bytes, mime, "", category_hint, typed_text)
 
 
 # ---------------------------------------------------------
@@ -625,6 +718,14 @@ with st.sidebar:
     for m_name in FALLBACK_MODELS:
         if m_name not in model_list:
             model_list.append(m_name)
+
+    training_label = st.radio(
+        "🎓 วิธีนับชั่วโมงใบประกาศ/เกียรติบัตรอบรม:",
+        ["ตามชั่วโมงที่ระบุในใบประกาศ (เช่น 3 ชม. = 3 ภาระงาน)",
+         "ตามเกณฑ์งานพัฒนาตนเอง (1 ชม./วันทำการ)"],
+        help="เกณฑ์ข้อ 12 ระบุ 1 ชม. ต่อ 1 วันทำการที่เข้าร่วมตามแผนพัฒนารายบุคคล โปรดตรวจสอบแนวปฏิบัติของคณะ/มหาวิทยาลัยว่าใช้แบบใด",
+    )
+    training_mode = "cert" if training_label.startswith("ตามชั่วโมง") else "rubric"
 
     if active_api_key:
         st.success("🟢 พบ Gemini API Key", icon="🔑")
@@ -710,16 +811,24 @@ with tab1:
         input_method = st.radio("เลือกวิธีป้อนข้อมูลให้ AI:", [
             "📤 อัปโหลดไฟล์เอกสาร/คำสั่ง (PDF, PNG, JPG)",
             "📷 ถ่ายภาพคำสั่งจากกล้องมือถือ",
+            "🔗 วางลิงก์ Google Drive (สำหรับมือถือที่เลือกไฟล์ไม่ผ่าน)",
             "✍️ พิมพ์รายละเอียดภาระงานเอง",
         ])
 
         uploaded_file = None
         raw_text_input = ""
+        drive_url = ""
 
         if "อัปโหลด" in input_method:
             uploaded_file = st.file_uploader("แนบคำสั่ง/ประกาศ/วุฒิบัตร (PDF, JPG, PNG):", type=["pdf", "png", "jpg", "jpeg", "webp"])
         elif "ถ่ายภาพ" in input_method:
             uploaded_file = st.camera_input("ถ่ายภาพคำสั่งจากกล้องมือถือ")
+        elif "Google Drive" in input_method:
+            drive_url = st.text_input(
+                "ลิงก์ไฟล์ Google Drive:",
+                placeholder="https://drive.google.com/file/d/xxxx/view",
+                help="ใน Drive กด ⋮ > แชร์ > ตั้ง 'ทุกคนที่มีลิงก์' แล้วคัดลอกลิงก์มาวาง (ควรปิดแชร์หลังใช้เสร็จ)",
+            )
         else:
             raw_text_input = st.text_area(
                 "พิมพ์รายละเอียดภาระงานหรือข้อความในคำสั่ง:",
@@ -729,7 +838,7 @@ with tab1:
         btn_ai_process = st.button("🤖 ให้ AI อ่านเอกสารและวิเคราะห์ตามเกณฑ์ มรภ.สงขลา", type="primary", use_container_width=True)
 
     if btn_ai_process:
-        if uploaded_file is None and not raw_text_input.strip():
+        if uploaded_file is None and not raw_text_input.strip() and not drive_url.strip():
             st.session_state["ai_notice"] = ("warning", "⚠️ กรุณาอัปโหลดไฟล์ ถ่ายภาพ หรือพิมพ์ข้อความรายละเอียดก่อนกดปุ่มครับ")
         else:
             with st.spinner("กำลังอ่านเอกสาร (OCR/Vision) และประเมินภาระงานตามเกณฑ์ มรภ.สงขลา..."):
@@ -741,6 +850,7 @@ with tab1:
                 mime = ""
                 typed_text = ""
 
+                garbled = False
                 try:
                     if uploaded_file is not None:
                         file_bytes = uploaded_file.getvalue()
@@ -750,24 +860,35 @@ with tab1:
                             mime = "application/pdf"
                         if mime == "application/pdf":
                             local_text = extract_text_from_pdf_bytes(file_bytes)
+                    elif drive_url.strip():
+                        file_bytes, mime = fetch_drive_file(drive_url.strip())
+                        if mime == "application/pdf":
+                            local_text = extract_text_from_pdf_bytes(file_bytes)
                     else:
                         typed_text = raw_text_input.strip()
                         local_text = typed_text
+                    if local_text and not typed_text and thai_text_looks_garbled(local_text):
+                        garbled = True
+                        local_text = ""
                 except Exception as e:
-                    notice = ("warning", "⚠️ อ่านไฟล์ที่แนบไม่สำเร็จ: " + str(e) + " — กรุณากรอกข้อมูลด้วยตนเอง")
+                    notice = ("warning", "⚠️ อ่านไฟล์ไม่สำเร็จ: " + str(e) + " — กรุณากรอกข้อมูลด้วยตนเอง")
 
-                is_scan_pdf = (mime == "application/pdf" and not local_text)
+                is_scan_pdf = (mime == "application/pdf" and not local_text and not garbled)
 
                 if notice is None:
                     if active_api_key:
                         try:
-                            raw_json, used_model = analyze_with_gemini(
-                                active_api_key, model_list, file_bytes, mime, local_text, category_input, typed_text
+                            raw_json, used_model = cached_analyze(
+                                file_bytes, mime, category_input, typed_text, tuple(model_list), active_api_key
                             )
-                            result = finalize_result(raw_json, local_text, filename, category_input)
+                            result = finalize_result(raw_json, local_text, filename, category_input, training_mode)
                             msg = "✅ Gemini (" + used_model + ") อ่านเอกสารและร่างข้อความทางการเรียบร้อยแล้ว"
                             if is_scan_pdf:
                                 msg += " (ตรวจพบว่าเป็น PDF สแกน ไม่มี text layer จึงอ่านจากภาพโดยตรง)"
+                            if garbled:
+                                msg += " (text layer ของ PDF สระ/วรรณยุกต์หาย จึงอ่านจากภาพแทน)"
+                            if result["is_training"]:
+                                msg += " | ตรวจพบเป็นใบประกาศ/เกียรติบัตรอบรม → จัดหมวด 5 และนับชั่วโมงตามโหมดที่เลือกในแถบด้านซ้าย"
                             if result["rule_applied"]:
                                 msg += " | ใช้กฎงานสร้างสรรค์นานาชาติที่ได้รับรางวัล/ดีเยี่ยม = 24.0 ภาระงาน"
                             if result["notes"]:
@@ -785,7 +906,7 @@ with tab1:
                 if result is None:
                     # โหมดสำรอง: ใช้ regex กับ text layer เท่าที่มี ไม่ใส่ข้อมูลสมมติ ไม่ใช้ชื่อไฟล์
                     try:
-                        result = parse_text_local(local_text, filename, category_input) if local_text else blank_result(category_input)
+                        result = parse_text_local(local_text, filename, category_input, training_mode) if local_text else blank_result(category_input)
                     except Exception:
                         result = blank_result(category_input)
                     if is_scan_pdf or (mime.startswith("image/") and mime != ""):
